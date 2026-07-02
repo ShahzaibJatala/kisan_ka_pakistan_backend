@@ -1,0 +1,172 @@
+datasource db {
+  provider = "postgresql"
+  // I completely removed the directUrl line from here!
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// --- Enums ---
+enum Role {
+  FARMER
+  ARTIA
+  SADAR
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+// --- Models ---
+
+model User {
+  id            Int        @id @default(autoincrement())
+  phone         String?    @unique // Primary login identifier
+  email         String?    @unique
+  cnic          String?    @unique // Required for verification per design
+  password      String
+  name          String
+  role          Role       @default(FARMER)
+  status        UserStatus @default(PENDING) // Represents verification state
+
+  // OTP Fields
+  resetOtp      String?
+  otpExpires    DateTime?
+  isOtpVerified Boolean    @default(false)
+
+  // Basic Profile Info
+  profileImage  String?
+  address       String?
+  city          String?
+
+  // --- Hierarchy & Auditing (Self-Relations) ---
+  createdBy     Int?
+  creator       User?      @relation("UserCreatedBy", fields: [createdBy], references: [id])
+  createdUsers  User[]     @relation("UserCreatedBy")
+
+  verifiedBy    Int?
+  verifier      User?      @relation("UserVerifiedBy", fields: [verifiedBy], references: [id])
+  verifiedUsers User[]     @relation("UserVerifiedBy")
+  verifiedAt    DateTime?
+
+  // --- Global Relations ---
+  mandiId       Int?
+  // mandi      Mandi?     @relation(fields: [mandiId], references: [id]) // Uncomment when Mandi model is added
+
+  // --- Role-Specific Profile Links ---
+  // A User can have one FarmerProfile (1-to-1)
+  farmerProfile FarmerProfile? @relation("UserFarmerProfile")
+  
+  // If this user is an Artia, they can manage many farmers (1-to-many)
+  artiaFarmers  FarmerProfile[] @relation("ArtiaToFarmers")
+
+  // Existing standard relations
+  posts         Post[]
+  prices        Price[]
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+
+
+model Price {
+  id              Int      @id @default(autoincrement())
+  name_en         String?
+  name_ur         String?
+  price           Float
+  district        String?
+  city            String?
+  quality         String?
+  additional_info String?
+  cropId          Int?
+  mandiId         Int?
+  unit            String?
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Post {
+  id        Int      @id @default(autoincrement())
+  title_en  String?
+  title_ur  String?
+  body_en   String?
+  body_ur   String?
+  authorId  Int
+  author    User     @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+
+model FarmerProfile {
+  id                 Int       @id @default(autoincrement())
+  
+  // 1-to-1 relation to the base User model
+  userId             Int       @unique
+  user               User      @relation("UserFarmerProfile", fields: [userId], references: [id], onDelete: Cascade)
+
+  // The Artia this farmer is attached to (null if independent/unverified)
+  artiaId            Int?
+  artia              User?     @relation("ArtiaToFarmers", fields: [artiaId], references: [id])
+
+  mandiId            Int?
+  // mandi           Mandi?    @relation(fields: [mandiId], references: [id]) // Uncomment when Mandi model is added
+
+  landSize           Float?    // Represented as a Float for acres/hectares
+
+  // Privacy & Consent
+  showOnArtiaProfile Boolean   @default(false)
+  consentUpdatedAt   DateTime?
+
+  // --- Future Relations ---
+  // primaryCrops    Crop[]?    // Add this implicit many-to-many relation once you build the Crop model
+  ledgers            FarmerLedger[]
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+model FarmerLedger {
+  id           Int           @id @default(autoincrement())
+  farmerId     Int
+  farmer       FarmerProfile @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Transaction {
+  id           Int          @id @default(autoincrement())
+  ledgerId     Int
+  ledger       FarmerLedger @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  amount       Float
+  type         String       // CREDIT or DEBIT
+  description  String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Crop {
+  id        Int      @id @default(autoincrement())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Mandi {
+  id        Int      @id @default(autoincrement())
+  name      String
+  city      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
