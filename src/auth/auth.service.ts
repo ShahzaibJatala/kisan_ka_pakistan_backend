@@ -3,6 +3,8 @@ import {
   UnauthorizedException,
   BadRequestException,
   NotFoundException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
@@ -14,9 +16,16 @@ import {
   VerifyOtpDto,
 } from './dto/reset-password.dto';
 import { MailService } from 'src/mail/mail.service';
+import {
+  SuperAdminLoginDto,
+  SuperAdminVerifyOtpDto,
+} from './dto/super-admin.dto';
 
 @Injectable()
 export class AuthService {
+  private lastSuperAdminAttemptTime = 0;
+  private superAdminOtp: { otp: string; expires: number } | null = null;
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
@@ -140,5 +149,121 @@ export class AuthService {
     });
 
     return { message: 'Password reset successfully' };
+  }
+
+  async generateTokens(user: any) {
+    const payload = {
+      sub: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+    };
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '1h' });
+    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
+    return { accessToken, refreshToken };
+  }
+
+  async verifyDashboardLoginToken(token: string) {
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(token);
+    } catch (e) {
+      throw new BadRequestException('Invalid or expired login token');
+    }
+
+    if (payload.type !== 'dashboard-login') {
+      throw new BadRequestException('Invalid token type');
+    }
+
+    const user = await this.usersService.findById(payload.userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return user;
+  }
+
+  async superAdminLogin(dto: SuperAdminLoginDto) {
+    const now = Date.now();
+    const tenMinutes = 10 * 60 * 1000;
+
+    if (now - this.lastSuperAdminAttemptTime < tenMinutes) {
+      const remaining = Math.ceil(
+        (tenMinutes - (now - this.lastSuperAdminAttemptTime)) / 1000 / 60,
+      );
+      throw new HttpException(
+        `Rate limit exceeded. You can only request once every 10 minutes. Try again in ${remaining} minutes.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    this.lastSuperAdminAttemptTime = now;
+
+    const envUser = process.env.SUPER_ADMIN_USER_NAME;
+    const envEmail = process.env.SUPER_ADMIN_EMAIL;
+    const envPass = process.env.SUPER_ADMIN_PASSWORD;
+
+    if (
+      dto.username !== envUser ||
+      dto.email !== envEmail ||
+      dto.password !== envPass
+    ) {
+      throw new UnauthorizedException('Invalid Super Admin credentials');
+    }
+
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    this.superAdminOtp = {
+      otp,
+      expires: now + 5 * 60 * 1000,
+    };
+
+    await this.mailService.sendSuperAdminOtpMail(dto.email, otp);
+
+    return {
+      message: 'Verification OTP sent to your registered Super Admin email.',
+    };
+  }
+
+  async superAdminVerifyOtp(dto: SuperAdminVerifyOtpDto) {
+    const now = Date.now();
+
+    if (!this.superAdminOtp) {
+      throw new BadRequestException(
+        'No login attempt found. Please try logging in again.',
+      );
+    }
+
+    if (now > this.superAdminOtp.expires) {
+      this.superAdminOtp = null;
+      throw new BadRequestException('OTP has expired. Please log in again.');
+    }
+
+    if (dto.otp !== this.superAdminOtp.otp) {
+      throw new BadRequestException('Invalid OTP. Please try again.');
+    }
+
+    this.superAdminOtp = null;
+
+    const email = process.env.SUPER_ADMIN_EMAIL || '';
+    const user = await this.usersService.findOrCreateSuperAdmin(
+      email,
+      'Super Admin',
+    );
+
+    const { accessToken, refreshToken } = await this.generateTokens(user);
+    console.log(accessToken, 'access', refreshToken);
+
+    return {
+      message: 'Logged in successfully',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      accessToken,
+      refreshToken,
+    };
   }
 }

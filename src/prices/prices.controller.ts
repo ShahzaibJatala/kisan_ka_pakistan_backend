@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { PricesService } from './prices.service';
 import { CreatePriceDto } from './dto/create-price.dto';
+import { UpdatePriceDto } from './dto/update-price.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/roles/roles.decorator';
@@ -45,7 +46,7 @@ export class PricesController {
   @Put(':id')
   update(
     @Param('id') id: string,
-    @Body() updatePriceDto: Partial<CreatePriceDto>,
+    @Body() updatePriceDto: UpdatePriceDto,
   ) {
     return this.pricesService.update(+id, updatePriceDto);
   }

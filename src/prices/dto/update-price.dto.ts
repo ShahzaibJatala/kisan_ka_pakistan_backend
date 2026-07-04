@@ -1,6 +1,6 @@
-import { IsString, IsNumber, IsOptional, IsNotEmpty, IsInt } from 'class-validator';
+import { IsString, IsNumber, IsOptional, IsInt } from 'class-validator';
 
-export class CreatePriceDto {
+export class UpdatePriceDto {
   @IsOptional()
   @IsString()
   name_en?: string;
@@ -9,9 +9,9 @@ export class CreatePriceDto {
   @IsString()
   name_ur?: string;
 
+  @IsOptional()
   @IsNumber()
-  @IsNotEmpty()
-  price: number;
+  price?: number;
 
   @IsOptional()
   @IsString()

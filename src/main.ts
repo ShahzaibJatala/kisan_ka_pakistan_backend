@@ -3,9 +3,11 @@ dotenv.config(); // This MUST happen before any other imports that use the DB
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.use(cookieParser());
 
   app.enableCors({
     origin: 'http://localhost:3000', // Your Next.js URL

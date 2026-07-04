@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000" # Nginx routes traffic here
+    env_file:
+      - .env
+    restart: always

@@ -19,6 +19,9 @@ import { FarmerModule } from './farmer/farmer.module';
       connection: {
         host: process.env.REDIS_HOST || 'localhost',
         port: parseInt(process.env.REDIS_PORT || '6379', 10),
+        username: 'default', // <-- Add this exact line
+        password: process.env.REDIS_PASSWORD,
+        tls: process.env.REDIS_HOST === 'localhost' ? undefined : {},
       },
     }),
     UsersModule,
@@ -32,4 +35,4 @@ import { FarmerModule } from './farmer/farmer.module';
   controllers: [AppController],
   providers: [AppService, MailService],
 })
-export class AppModule {}
+export class AppModule { }

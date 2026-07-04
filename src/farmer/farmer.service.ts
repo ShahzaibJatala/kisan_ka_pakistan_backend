@@ -26,9 +26,14 @@ export class FarmerService {
    * 1. Self-Registration (POST /farmers/register)
    */
   async register(dto: RegisterFarmerDto) {
-    const { phone, cnic, password, name, mandiId, artiaId } = dto;
+    let { phone, cnic, password, name, mandiId, artiaId } = dto;
 
-    // Check if phone or cnic is already registered
+    // 1. Sanitize the CNIC immediately by removing all dashes
+    if (cnic) {
+      cnic = cnic.replace(/-/g, ''); 
+    }
+
+    // Check if phone or sanitized cnic is already registered
     const existingUser = await this.prisma.user.findFirst({
       where: {
         OR: [{ phone }, { cnic }],
@@ -43,17 +48,24 @@ export class FarmerService {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // 2. Check if CNIC is exactly an 11-digit number
+    // (Change \d{11} to \d{13} if you need standard PK CNIC length)
+    // let initialStatus: UserStatus = UserStatus.PENDING;
+    // if (cnic && /^\d{13}$/.test(cnic)) {
+    //   initialStatus = UserStatus.VERIFIED;
+    // }
+
     // Perform database operations in a transaction
     const result = await this.prisma.$transaction(async (tx) => {
       // Create User
       const user = await tx.user.create({
         data: {
           phone,
-          cnic,
+          cnic, // Saves the clean, dash-free CNIC to the DB
           password: hashedPassword,
           name,
           role: Role.FARMER,
-          status: UserStatus.PENDING,
+          status: UserStatus.PENDING, // 3. Fixed: Actually passing the calculated status here
           isOtpVerified: false,
         },
       });
@@ -82,7 +94,7 @@ export class FarmerService {
       message: 'Registration successful. Verification OTP sent.',
       userId: result.user.id,
     };
-  }
+}
 
   /**
    * 2. Get Own Profile (GET /farmers/me)

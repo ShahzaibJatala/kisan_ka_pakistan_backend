@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePriceDto } from './dto/create-price.dto';
+import { UpdatePriceDto } from './dto/update-price.dto';
 import { PricesGateway } from './prices.gateway';
 
 @Injectable()
@@ -18,7 +19,7 @@ export class PricesService {
     return price;
   }
 
-  async update(id: number, updateData: Partial<CreatePriceDto>) {
+  async update(id: number, updateData: UpdatePriceDto) {
     const price = await this.prisma.price.update({
       where: { id },
       data: updateData,

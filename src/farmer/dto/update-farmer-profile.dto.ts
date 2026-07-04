@@ -20,4 +20,12 @@ export class UpdateFarmerProfileDto {
   @IsBoolean()
   @IsOptional()
   showOnArtiaProfile?: boolean;
+
+  @IsNumber()
+  @IsOptional()
+  artiaId?: number;
+
+  @IsNumber()
+  @IsOptional()
+  mandiId?: number;
 }
