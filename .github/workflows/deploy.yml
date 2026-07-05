@@ -1,0 +1,33 @@
+name: Automated EC2 Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Execute Remote SSH Commands
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USERNAME }}
+          key: ${{ secrets.AWS_PRIVATE_KEY }}
+          script: |
+            # Navigate to the project folder on your EC2 server
+            cd ~/kisan_ka_pakistan_backend
+            
+            # Pull the newest changes from GitHub
+            git pull origin main
+            
+            # Rebuild and start the Docker container in the background
+            docker-compose up -d --build
+            
+            # Delete old images to prevent the 30GB hard drive from filling up
+            docker image prune -a -f
