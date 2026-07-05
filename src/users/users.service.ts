@@ -175,7 +175,7 @@ export class UsersService {
     };
     const token = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-    const verifyUrl = `${process.env.BACKEND_URL || 'http://localhost:3001'}/users/confirm-verification?token=${token}`;
+    const verifyUrl = `${process.env.BACKEND_URL}/users/confirm-verification?token=${token}`;
 
     if (!verifier.email) {
       throw new BadRequestException('Verifier has no registered email address');
@@ -243,7 +243,7 @@ export class UsersService {
       type: 'dashboard-login',
     };
     const loginToken = this.jwtService.sign(loginPayload, { expiresIn: '15m' });
-    const dashboardLoginUrl = `${process.env.BACKEND_URL || 'http://localhost:3001'}/auth/dashboard-login?token=${loginToken}`;
+    const dashboardLoginUrl = `${process.env.BACKEND_URL}/auth/dashboard-login?token=${loginToken}`;
 
     if (user.email) {
       await this.mailService.sendVerificationSuccessMail(
@@ -350,7 +350,7 @@ export class UsersService {
       const token = this.jwtService.sign(payload, { expiresIn: '7d' });
 
       // Verify URL
-      const verifyUrl = `${process.env.BACKEND_URL || 'http://localhost:3001'}/users/confirm-verification?token=${token}`;
+      const verifyUrl = `${process.env.BACKEND_URL}/users/confirm-verification?token=${token}`;
 
       await this.mailService.sendVerificationRequestMail(superAdminEmail, user, verifyUrl);
 
