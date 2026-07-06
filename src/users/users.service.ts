@@ -224,8 +224,23 @@ export class UsersService {
       },
     });
 
+    const loginPayload = {
+      userId: user.id,
+      type: 'dashboard-login',
+    };
+    const loginToken = this.jwtService.sign(loginPayload, { expiresIn: '15m' });
+    const dashboardLoginUrl = `${process.env.BACKEND_URL || 'http://localhost:3001'}/auth/dashboard-login?token=${loginToken}`;
+
+    if (user.email) {
+      await this.mailService.sendVerificationSuccessMail(
+        user.email,
+        dashboardLoginUrl,
+        user.role,
+      );
+    }
+
     return {
-      message: `${user.name} has been verified successfully.`,
+      message: `${user.name} has been verified successfully. An email has been sent to them with their login credentials.`,
     };
   }
 

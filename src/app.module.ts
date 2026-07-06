@@ -8,7 +8,6 @@ import { AuthModule } from './auth/auth.module';
 import { PricesModule } from './prices/prices.module';
 import { PostsModule } from './posts/posts.module';
 import { PrismaModule } from './prisma/prisma.module';
-import { MailService } from './mail/mail.service';
 import { MailModule } from './mail/mail.module';
 import { FarmerModule } from './farmer/farmer.module';
 
@@ -33,6 +32,6 @@ import { FarmerModule } from './farmer/farmer.module';
     FarmerModule,
   ],
   controllers: [AppController],
-  providers: [AppService, MailService],
+  providers: [AppService],
 })
 export class AppModule { }

@@ -1,8 +1,15 @@
 import { Controller, Post, Get, Body, Query, Res } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { SendOtpDto, VerifyOtpDto, ResetPasswordDto } from './dto/reset-password.dto';
-import { SuperAdminLoginDto, SuperAdminVerifyOtpDto } from './dto/super-admin.dto';
+import {
+  SendOtpDto,
+  VerifyOtpDto,
+  ResetPasswordDto,
+} from './dto/reset-password.dto';
+import {
+  SuperAdminLoginDto,
+  SuperAdminVerifyOtpDto,
+} from './dto/super-admin.dto';
 import type { Response } from 'express';
 
 @Controller('auth')
@@ -31,12 +38,10 @@ export class AuthController {
   }
 
   @Get('dashboard-login')
-  async dashboardLogin(
-    @Query('token') token: string,
-    @Res() res: Response,
-  ) {
+  async dashboardLogin(@Query('token') token: string, @Res() res: Response) {
     const user = await this.authService.verifyDashboardLoginToken(token);
-    const { accessToken, refreshToken } = await this.authService.generateTokens(user);
+    const { accessToken, refreshToken } =
+      await this.authService.generateTokens(user);
 
     // Set HTTP-only cookies for both access and refresh tokens
     res.cookie('access_token', accessToken, {
@@ -52,9 +57,19 @@ export class AuthController {
       path: '/',
     });
 
-    // Redirect to frontend dashboard
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000/dashboard';
-    return res.redirect(frontendUrl);
+    // Redirect to frontend dashboard with role-based path and only access token
+    let baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    if (baseUrl.endsWith('/')) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
+
+    // Construct redirect URL: {baseUrl}/dashboard/{role}?accessToken=...
+    const rolePath = user.role.toLowerCase().replace('_', '-');
+    const redirectUrl = baseUrl.endsWith('/')
+      ? `${baseUrl}/${rolePath}?accessToken=${accessToken}`
+      : `${baseUrl}/${rolePath}/dashboard?accessToken=${accessToken}`;
+
+    return res.redirect(redirectUrl);
   }
 
   @Post('super-admin/login')
