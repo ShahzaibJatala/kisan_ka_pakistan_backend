@@ -19,7 +19,7 @@ async function bootstrap() {
   );
 
   app.enableCors({
-    origin: 'http://localhost:3000', // Your Next.js URL
+    origin: ['http://localhost:3000', 'https://kisan-ka-pakistan.vercel.app'], // Your Next.js URL
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true, // Important if you use cookies later!
   });
