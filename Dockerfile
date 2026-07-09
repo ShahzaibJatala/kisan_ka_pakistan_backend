@@ -1,5 +1,6 @@
 # Step 1: Build Stage
-FROM node:18-alpine AS builder
+# Changed from node:18-alpine to node:22-alpine
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
@@ -9,12 +10,13 @@ RUN npx prisma generate
 RUN npm run build
 
 # Step 2: Production Stage
-FROM node:18-alpine
+# Changed from node:18-alpine to node:22-alpine
+FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma/
-# Install only production dependencies and regenerate the client for the lightweight container
-RUN npm install --only=production
+# Updated to --omit=dev (modern equivalent of --only=production)
+RUN npm install --omit=dev
 RUN npx prisma generate
 COPY --from=builder /app/dist ./dist
 
