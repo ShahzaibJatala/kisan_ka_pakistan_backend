@@ -129,14 +129,14 @@ export class MailProcessor extends WorkerHost {
   private async handleSendVerificationSuccessMail(data: { to: string; dashboardUrl: string; role: string }) {
     const { to, dashboardUrl, role } = data;
     const subject = 'Account Verified Successfully - Kisan ka Pakistan';
-    const text = `Congratulations! Your account as ${role} has been verified successfully.\n\nAccess your dashboard using the link below:\n${dashboardUrl}`;
+    const text = `Congratulations! Your account as ${role} has been verified successfully.\n\nAccess your account using the link below:\n${dashboardUrl}`;
     const html = `
       <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; max-width: 600px; margin: auto;">
         <h2 style="color: #2E7D32;">Congratulations! Your Account is Verified</h2>
         <p>Your account as <b>${role}</b> has been verified by the respective authority.</p>
-        <p>You can now access all the features of your role.</p>
+        <p>You can now log in and access all the features of your role.</p>
         <div style="margin-top: 30px; text-align: center;">
-          <a href="${dashboardUrl}" style="background-color: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block;">Go to Dashboard</a>
+          <a href="${dashboardUrl}" style="background-color: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block;">Login to your Account</a>
         </div>
         <p style="margin-top: 20px; font-size: 12px; color: #666;">
           If the button doesn't work, copy and paste this link in your browser:<br/>

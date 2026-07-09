@@ -3,11 +3,20 @@ dotenv.config(); // This MUST happen before any other imports that use the DB
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.use(cookieParser());
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      transform: true,       // auto-transform payloads to DTO types
+      whitelist: true,       // strip unknown properties
+      forbidNonWhitelisted: false,
+    }),
+  );
 
   app.enableCors({
     origin: 'http://localhost:3000', // Your Next.js URL

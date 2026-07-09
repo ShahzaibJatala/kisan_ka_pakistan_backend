@@ -9,20 +9,20 @@ import {
 export class RegisterFarmerDto {
   @IsString()
   @IsNotEmpty()
-  phone: string;
+  phone!: string;
 
   @IsString()
   @IsNotEmpty()
-  cnic: string;
+  cnic!: string;
 
   @IsString()
   @IsNotEmpty()
   @MinLength(6, { message: 'Password must be at least 6 characters long' })
-  password: string;
+  password!: string;
 
   @IsString()
   @IsNotEmpty()
-  name: string;
+  name!: string;
 
   @IsNumber()
   @IsOptional()

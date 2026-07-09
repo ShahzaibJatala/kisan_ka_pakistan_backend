@@ -28,6 +28,12 @@ export class PricesController {
   }
 
   // GUEST (public)
+  @Get('latest')
+  findLatestPrices() {
+    return this.pricesService.findLatestPrices();
+  }
+
+  // GUEST (public)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.pricesService.findOne(+id);

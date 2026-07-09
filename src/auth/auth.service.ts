@@ -20,6 +20,7 @@ import {
   SuperAdminLoginDto,
   SuperAdminVerifyOtpDto,
 } from './dto/super-admin.dto';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class AuthService {
@@ -30,6 +31,7 @@ export class AuthService {
     private usersService: UsersService,
     private jwtService: JwtService,
     private mailService: MailService,
+    private prisma: PrismaService,
   ) {}
 
   async validateUser(loginDto: LoginDto): Promise<any> {
@@ -51,17 +53,10 @@ export class AuthService {
   }
 
   async login(user: any) {
-    // Include `name` in the JWT so the frontend can fully reconstruct
-    // the user object from the token alone on page reload — no extra DB call.
-    const payload = {
-      sub: user.id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-    };
+    const { accessToken, refreshToken } = await this.generateTokens(user);
     return {
-      access_token: this.jwtService.sign(payload),
+      access_token: accessToken,
+      refresh_token: refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -81,24 +76,15 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    // Generate 4 digit OTP (1000 - 9999)
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     const expires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-    // 1. FIXED SYNTAX ERRORS:
-    // You cannot just write "resetOtp = otp". You need to pass these
-    // to your Prisma database so they actually save!
-
-    // 2. SAVING TO DATABASE:
-    // Assuming your usersService has an update method.
-    // If it doesn't, you need to create one using prisma.user.update()
     await this.usersService.update(user.id, {
       resetOtp: otp,
       otpExpires: expires,
       isOtpVerified: false,
     });
 
-    // Send the email
     await this.mailService.sendOtpMail(email, otp);
 
     return { message: 'OTP sent successfully' };
@@ -120,8 +106,8 @@ export class AuthService {
 
     await this.usersService.update(user.id, {
       isOtpVerified: true,
-      resetOtp: null, // Use null instead of '' to clear the database field
-      otpExpires: null, // Use null instead of undefined
+      resetOtp: null,
+      otpExpires: null,
     });
 
     return { message: 'OTP verified successfully' };
@@ -151,17 +137,83 @@ export class AuthService {
     return { message: 'Password reset successfully' };
   }
 
+  /**
+   * Generate both tokens.
+   * - Access token: full payload (sub, name, email, phone, role) — short-lived 15m
+   * - Refresh token: ONLY userId (sub) — long-lived 7d, saved hashed in DB
+   */
   async generateTokens(user: any) {
-    const payload = {
+    const accessPayload = {
       sub: user.id,
       name: user.name,
       email: user.email,
       phone: user.phone,
       role: user.role,
     };
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
-    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
+
+    // Refresh token contains ONLY the userId for security
+    const refreshPayload = { sub: user.id };
+
+    const accessToken = this.jwtService.sign(accessPayload, { expiresIn: '15m' });
+    const refreshToken = this.jwtService.sign(refreshPayload, { expiresIn: '7d' });
+
+    // Hash the refresh token before saving to DB (never store plain tokens)
+    const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { refreshToken: hashedRefreshToken },
+    });
+
     return { accessToken, refreshToken };
+  }
+
+  /**
+   * Validate refresh token and return new access token.
+   * Checks: valid JWT, userId exists in DB, token matches saved hash.
+   */
+  async refreshAccessToken(refreshToken: string) {
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(refreshToken);
+    } catch (e) {
+      throw new UnauthorizedException('Invalid or expired refresh token. Please login to your account.');
+    }
+
+    const userId = payload.sub;
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+
+    if (!user || !user.refreshToken) {
+      throw new UnauthorizedException('Session not found. Please login to your account.');
+    }
+
+    // Compare the incoming token with the hashed one stored in DB
+    const tokenMatches = await bcrypt.compare(refreshToken, user.refreshToken);
+    if (!tokenMatches) {
+      throw new UnauthorizedException('Refresh token is invalid. Please login to your account.');
+    }
+
+    // Issue a new access token only (refresh token stays the same until logout)
+    const accessPayload = {
+      sub: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+    };
+    const newAccessToken = this.jwtService.sign(accessPayload, { expiresIn: '15m' });
+
+    return { access_token: newAccessToken };
+  }
+
+  /**
+   * Logout: clear refresh token from DB
+   */
+  async logout(userId: number) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { refreshToken: null },
+    });
+    return { message: 'Logged out successfully' };
   }
 
   async verifyDashboardLoginToken(token: string) {
@@ -252,7 +304,6 @@ export class AuthService {
     );
 
     const { accessToken, refreshToken } = await this.generateTokens(user);
-    console.log(accessToken, 'access', refreshToken);
 
     return {
       message: 'Logged in successfully',

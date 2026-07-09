@@ -5,6 +5,8 @@ import {
   Patch,
   Body,
   Req,
+  Param,
+  ParseIntPipe,
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
@@ -12,6 +14,9 @@ import { FarmerService } from './farmer.service';
 import { RegisterFarmerDto } from './dto/register-farmer.dto';
 import { UpdateFarmerProfileDto } from './dto/update-farmer-profile.dto';
 import { PostCropPriceDto } from './dto/post-crop-price.dto';
+import { CreateLedgerDto } from './dto/create-ledger.dto';
+import { UpdateLedgerDto } from './dto/update-ledger.dto';
+import { AddTransactionDto } from './dto/add-transaction.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/roles/roles.decorator';
@@ -30,17 +35,17 @@ interface RequestWithUser extends Request {
 export class FarmerController {
   constructor(private readonly farmerService: FarmerService) {}
 
-  /**
-   * 1. Self-Registration (POST /farmers/register)
-   */
+  // ─── PUBLIC ───────────────────────────────────────────────────────────────
+
+  /** POST /farmers/register */
   @Post('register')
   async register(@Body() registerFarmerDto: RegisterFarmerDto) {
     return this.farmerService.register(registerFarmerDto);
   }
 
-  /**
-   * 2. Get Own Profile (GET /farmers/me)
-   */
+  // ─── FARMER SELF ROUTES ───────────────────────────────────────────────────
+
+  /** GET /farmers/me */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.FARMER)
   @Get('me')
@@ -48,9 +53,7 @@ export class FarmerController {
     return this.farmerService.getProfile(req.user.id);
   }
 
-  /**
-   * 3. Update Profile / Privacy Consent (PATCH /farmers/me)
-   */
+  /** PATCH /farmers/me */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.FARMER)
   @Patch('me')
@@ -58,15 +61,10 @@ export class FarmerController {
     @Req() req: RequestWithUser,
     @Body() updateFarmerProfileDto: UpdateFarmerProfileDto,
   ) {
-    return this.farmerService.updateProfile(
-      req.user.id,
-      updateFarmerProfileDto,
-    );
+    return this.farmerService.updateProfile(req.user.id, updateFarmerProfileDto);
   }
 
-  /**
-   * 4. Post Crop Price (POST /farmers/prices)
-   */
+  /** POST /farmers/prices */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.FARMER)
   @Post('prices')
@@ -77,13 +75,68 @@ export class FarmerController {
     return this.farmerService.postCropPrice(req.user.id, postCropPriceDto);
   }
 
-  /**
-   * 5. View Ledger (GET /farmers/me/ledger)
-   */
+  /** GET /farmers/me/ledgers — Farmer views their own ledgers */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.FARMER)
-  @Get('me/ledger')
+  @Get('me/ledgers')
   async getLedger(@Req() req: RequestWithUser) {
     return this.farmerService.getLedger(req.user.id);
+  }
+
+  // ─── ARTIA ROUTES (static paths MUST come before parameterized paths) ─────
+
+  /** GET /farmers/artia/dashboard — Artia sees all farmers + their ledgers */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Get('artia/dashboard')
+  async getArtiaFarmersDashboard(@Req() req: RequestWithUser) {
+    return this.farmerService.getArtiaFarmersDashboard(req.user.id);
+  }
+
+  /** POST /farmers/ledgers/:ledgerId/transactions — Artia adds a transaction */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Post('ledgers/:ledgerId/transactions')
+  async addTransaction(
+    @Req() req: RequestWithUser,
+    @Param('ledgerId', ParseIntPipe) ledgerId: number,
+    @Body() addTransactionDto: AddTransactionDto,
+  ) {
+    return this.farmerService.addTransaction(req.user.id, ledgerId, addTransactionDto);
+  }
+
+  /** PATCH /farmers/ledgers/:ledgerId — Artia edits a ledger */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Patch('ledgers/:ledgerId')
+  async updateLedger(
+    @Req() req: RequestWithUser,
+    @Param('ledgerId', ParseIntPipe) ledgerId: number,
+    @Body() updateLedgerDto: UpdateLedgerDto,
+  ) {
+    return this.farmerService.updateLedger(req.user.id, ledgerId, updateLedgerDto);
+  }
+
+  /** GET /farmers/:farmerId/ledgers — Artia views specific farmer's ledgers */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Get(':farmerId/ledgers')
+  async getFarmerLedgers(
+    @Req() req: RequestWithUser,
+    @Param('farmerId', ParseIntPipe) farmerId: number,
+  ) {
+    return this.farmerService.getFarmerLedgers(req.user.id, farmerId);
+  }
+
+  /** POST /farmers/:farmerId/ledgers — Artia creates a ledger for a farmer */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Post(':farmerId/ledgers')
+  async createLedger(
+    @Req() req: RequestWithUser,
+    @Param('farmerId', ParseIntPipe) farmerId: number,
+    @Body() createLedgerDto: CreateLedgerDto,
+  ) {
+    return this.farmerService.createLedger(req.user.id, farmerId, createLedgerDto);
   }
 }

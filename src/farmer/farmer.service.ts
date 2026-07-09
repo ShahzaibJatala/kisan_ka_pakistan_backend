@@ -12,6 +12,11 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as bcrypt from 'bcrypt';
 import { Role, UserStatus } from '@prisma/client';
+import { JwtService } from '@nestjs/jwt';
+import { MailService } from '../mail/mail.service';
+import { CreateLedgerDto } from './dto/create-ledger.dto';
+import { UpdateLedgerDto } from './dto/update-ledger.dto';
+import { AddTransactionDto } from './dto/add-transaction.dto';
 
 @Injectable()
 export class FarmerService {
@@ -20,6 +25,8 @@ export class FarmerService {
     @InjectQueue('otp-queue') private readonly otpQueue: Queue,
     @InjectQueue('price-aggregation')
     private readonly priceAggregationQueue: Queue,
+    private jwtService: JwtService,
+    private mailService: MailService,
   ) {}
 
   /**
@@ -90,11 +97,34 @@ export class FarmerService {
       name: result.user.name,
     });
 
+    // Send verification email to Super Admin
+    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || '';
+    const superAdmin = await this.prisma.user.findFirst({
+      where: { role: Role.SUPER_ADMIN },
+    });
+    
+    const verifierId = superAdmin ? superAdmin.id : 1;
+
+    // Generate confirmation token (JWT payload with verifier verification type)
+    const payload = {
+      userId: result.user.id,
+      verifierId: verifierId,
+      type: 'confirm-verification',
+    };
+    const token = this.jwtService.sign(payload, { expiresIn: '7d' });
+
+    // Verify URL
+    const verifyUrl = `${process.env.BACKEND_URL}/users/confirm-verification?token=${token}`;
+
+    if (superAdminEmail) {
+      await this.mailService.sendVerificationRequestMail(superAdminEmail, result.user, verifyUrl);
+    }
+
     return {
-      message: 'Registration successful. Verification OTP sent.',
+      message: 'Registration successful. A verification request email has been sent to Super Admin.',
       userId: result.user.id,
     };
-}
+  }
 
   /**
    * 2. Get Own Profile (GET /farmers/me)
@@ -224,7 +254,7 @@ export class FarmerService {
   }
 
   /**
-   * 5. View Ledger (GET /farmers/me/ledger)
+   * 5. Farmer views their own ledgers (GET /farmers/me/ledgers)
    */
   async getLedger(userId: number) {
     const profile = await this.prisma.farmerProfile.findUnique({
@@ -239,16 +269,176 @@ export class FarmerService {
       where: { farmerId: profile.id },
       include: {
         transactions: {
-          orderBy: {
-            createdAt: 'desc',
-          },
+          orderBy: { createdAt: 'desc' },
         },
       },
-      orderBy: {
-        createdAt: 'desc',
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Compute balance per ledger
+    return ledgers.map(ledger => {
+      const balance = ledger.transactions.reduce((sum, tx) => {
+        return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+      }, 0);
+      return { ...ledger, balance };
+    });
+  }
+
+  /**
+   * 6. Artia creates a new ledger for a specific farmer (POST /farmers/:farmerId/ledgers)
+   */
+  async createLedger(artiaId: number, farmerUserId: number, dto: CreateLedgerDto) {
+    // Confirm farmer profile exists and belongs to this artia
+    const profile = await this.prisma.farmerProfile.findFirst({
+      where: { userId: farmerUserId, artiaId },
+    });
+
+    if (!profile) {
+      throw new NotFoundException(
+        'Farmer not found or does not belong to your account.',
+      );
+    }
+
+    const ledger = await this.prisma.farmerLedger.create({
+      data: {
+        name: dto.name,
+        season: dto.season || null,
+        cropName: dto.cropName || null,
+        description: dto.description || null,
+        farmerId: profile.id,
+        createdByArtiaId: artiaId,
       },
     });
 
-    return ledgers;
+    return ledger;
+  }
+
+  /**
+   * 7. Artia adds a transaction to a farmer's ledger (POST /farmers/ledgers/:ledgerId/transactions)
+   */
+  async addTransaction(artiaId: number, ledgerId: number, dto: AddTransactionDto) {
+    // Verify the ledger was created by this artia
+    const ledger = await this.prisma.farmerLedger.findFirst({
+      where: { id: ledgerId, createdByArtiaId: artiaId },
+    });
+
+    if (!ledger) {
+      throw new NotFoundException(
+        'Ledger not found or you do not have permission to manage it.',
+      );
+    }
+
+    const transaction = await this.prisma.transaction.create({
+      data: {
+        ledgerId,
+        amount: dto.amount,
+        type: dto.type,
+        description: dto.description || null,
+      },
+    });
+
+    return transaction;
+  }
+
+  /**
+   * 8. Artia views all their farmers with their ledgers (GET /farmers/artia/dashboard)
+   */
+  async getArtiaFarmersDashboard(artiaId: number) {
+    const profiles = await this.prisma.farmerProfile.findMany({
+      where: { artiaId },
+      include: {
+        user: {
+          select: {
+            id: true, name: true, phone: true, email: true,
+            profileImage: true, city: true, address: true, status: true,
+          },
+        },
+        mandi: true,
+        ledgers: {
+          include: {
+            transactions: { orderBy: { createdAt: 'desc' } },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+
+    return profiles.map(profile => {
+      const ledgersWithBalance = profile.ledgers.map(ledger => {
+        const balance = ledger.transactions.reduce((sum, tx) => {
+          return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+        }, 0);
+        return { ...ledger, balance };
+      });
+      return { ...profile, ledgers: ledgersWithBalance };
+    });
+  }
+
+  /**
+   * 9. Artia views ledgers of one specific farmer (GET /farmers/:farmerId/ledgers)
+   */
+  async getFarmerLedgers(artiaId: number, farmerUserId: number) {
+    const profile = await this.prisma.farmerProfile.findFirst({
+      where: { userId: farmerUserId, artiaId },
+      include: { user: { select: { id: true, name: true, phone: true, email: true } } },
+    });
+
+    if (!profile) {
+      throw new NotFoundException(
+        'Farmer not found or does not belong to your account.',
+      );
+    }
+
+    const ledgers = await this.prisma.farmerLedger.findMany({
+      where: { farmerId: profile.id },
+      include: {
+        transactions: { orderBy: { createdAt: 'desc' } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const ledgersWithBalance = ledgers.map(ledger => {
+      const balance = ledger.transactions.reduce((sum, tx) => {
+        return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+      }, 0);
+      return { ...ledger, balance };
+    });
+
+    return { farmer: profile.user, ledgers: ledgersWithBalance };
+  }
+
+  /**
+   * 10. Artia edits a ledger (PATCH /farmers/ledgers/:ledgerId)
+   */
+  async updateLedger(artiaId: number, ledgerId: number, dto: UpdateLedgerDto) {
+    // Verify the ledger belongs to this artia
+    const ledger = await this.prisma.farmerLedger.findFirst({
+      where: { id: ledgerId, createdByArtiaId: artiaId },
+    });
+
+    if (!ledger) {
+      throw new NotFoundException(
+        'Ledger not found or you do not have permission to edit it.',
+      );
+    }
+
+    const updated = await this.prisma.farmerLedger.update({
+      where: { id: ledgerId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.season !== undefined && { season: dto.season }),
+        ...(dto.cropName !== undefined && { cropName: dto.cropName }),
+        ...(dto.description !== undefined && { description: dto.description }),
+      },
+      include: {
+        transactions: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    const balance = updated.transactions.reduce((sum, tx) => {
+      return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+    }, 0);
+
+    return { ...updated, balance };
   }
 }

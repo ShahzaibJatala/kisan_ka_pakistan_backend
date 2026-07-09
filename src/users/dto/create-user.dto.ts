@@ -9,24 +9,22 @@ import {
 import { Role, UserStatus } from '@prisma/client';
 
 export class CreateUserDto {
-  @IsOptional()
   @IsString()
-  phone?: string;
+  phone!: string;
 
   @IsString()
-  email?: string;
+  email!: string;
 
   @IsString()
-  cnic?: string;
+  cnic!: string;
 
   @IsNotEmpty()
   @IsString()
   @MinLength(6)
-  password: string;
+  password!: string;
 
-  @IsNotEmpty()
   @IsString()
-  name: string;
+  name!: string;
 
   @IsEnum(Role)
   role?: Role;
@@ -43,7 +41,7 @@ export class CreateUserDto {
   address?: string;
 
   @IsString()
-  city?: string;
+  city!: string;
 
   @IsOptional()
   @IsInt()

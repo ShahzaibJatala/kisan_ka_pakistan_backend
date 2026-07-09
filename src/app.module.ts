@@ -10,6 +10,7 @@ import { PostsModule } from './posts/posts.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { MailModule } from './mail/mail.module';
 import { FarmerModule } from './farmer/farmer.module';
+import { MandiModule } from './mandi/mandi.module';
 
 @Module({
   imports: [

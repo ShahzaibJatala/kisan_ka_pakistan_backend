@@ -55,6 +55,13 @@ export class UsersService {
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
 
+    // If an upper role is creating this user, they are automatically verified by that creator.
+    // If not (e.g. self-registration in the future), they default to PENDING.
+    const isCreatedByUpperRole = !!creatorId;
+    const finalStatus = isCreatedByUpperRole ? UserStatus.VERIFIED : (createUserDto.status || UserStatus.PENDING);
+    const verifiedBy = isCreatedByUpperRole ? creatorId : null;
+    const verifiedAt = isCreatedByUpperRole ? new Date() : null;
+
     const user = await this.prisma.user.create({
       data: {
         name: createUserDto.name,
@@ -63,15 +70,43 @@ export class UsersService {
         email: createUserDto.email,
         cnic: createUserDto.cnic,
         role: targetRole,
-        status: createUserDto.status,
+        status: finalStatus,
         profileImage: createUserDto.profileImage,
         address: createUserDto.address,
         city: createUserDto.city,
         mandiId: createUserDto.mandiId,
         createdBy: creatorId,
+        verifiedBy: verifiedBy,
+        verifiedAt: verifiedAt,
       },
     });
+
+    // --- FIX: Create FarmerProfile for Farmers ---
+    if (targetRole === Role.FARMER) {
+      const artiaId = creatorRole === Role.ARTIA ? creatorId : null;
+      await this.prisma.farmerProfile.create({
+        data: {
+          userId: user.id,
+          artiaId: artiaId,
+          mandiId: createUserDto.mandiId || null,
+        }
+      });
+    }
+
     const { password, ...result } = user;
+
+    // If verified by upper role, send them the success email with the dashboard login link
+    if (isCreatedByUpperRole && user.email) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
+      
+      await this.mailService.sendVerificationSuccessMail(
+        user.email,
+        loginUrl,
+        user.role,
+      );
+    }
+
     return result;
   }
 
@@ -224,17 +259,13 @@ export class UsersService {
       },
     });
 
-    const loginPayload = {
-      userId: user.id,
-      type: 'dashboard-login',
-    };
-    const loginToken = this.jwtService.sign(loginPayload, { expiresIn: '15m' });
-    const dashboardLoginUrl = `${process.env.BACKEND_URL || 'http://localhost:3001'}/auth/dashboard-login?token=${loginToken}`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
 
     if (user.email) {
       await this.mailService.sendVerificationSuccessMail(
         user.email,
-        dashboardLoginUrl,
+        loginUrl,
         user.role,
       );
     }
@@ -253,17 +284,13 @@ export class UsersService {
       throw new BadRequestException('User is not verified yet');
     }
 
-    const loginPayload = {
-      userId: user.id,
-      type: 'dashboard-login',
-    };
-    const loginToken = this.jwtService.sign(loginPayload, { expiresIn: '15m' });
-    const dashboardLoginUrl = `${process.env.BACKEND_URL}/auth/dashboard-login?token=${loginToken}`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
 
     if (user.email) {
       await this.mailService.sendVerificationSuccessMail(
         user.email,
-        dashboardLoginUrl,
+        loginUrl,
         user.role,
       );
     }
@@ -290,6 +317,11 @@ export class UsersService {
   }
 
   async createSadar(createUserDto: CreateUserDto, creator?: { id: number; role: Role }) {
+    // Mandi is required for Sadar
+    if (!createUserDto.mandiId) {
+      throw new BadRequestException('mandiId is required. A Sadar must belong to a Mandi.');
+    }
+
     if (createUserDto.phone) {
       const existing = await this.findByPhone(createUserDto.phone);
       if (existing) throw new BadRequestException('Phone already exists');
@@ -375,5 +407,157 @@ export class UsersService {
         message: 'Registration successful. A verification request email has been sent to Super Admin.',
       };
     }
+  }
+
+  async getSadarArtias(sadarId: number) {
+    const artias = await this.prisma.user.findMany({
+      where: {
+        role: Role.ARTIA,
+        createdBy: sadarId,
+      },
+      include: {
+        mandi: true,
+      },
+    });
+
+    return {
+      count: artias.length,
+      artias: artias.map(artia => {
+        const { password, ...safeArtia } = artia;
+        return safeArtia;
+      }),
+    };
+  }
+
+  async getArtiaFarmers(artiaId: number) {
+    const profiles = await this.prisma.farmerProfile.findMany({
+      where: {
+        artiaId: artiaId,
+      },
+      include: {
+        user: true,
+        mandi: true,
+      },
+    });
+
+    return {
+      count: profiles.length,
+      farmers: profiles.map(profile => {
+        if (profile.user) {
+          const { password, ...safeUser } = profile.user;
+          return { ...profile, user: safeUser };
+        }
+        return profile;
+      }),
+    };
+  }
+
+  async getFarmerArtia(farmerId: number) {
+    const profile = await this.prisma.farmerProfile.findUnique({
+      where: {
+        userId: farmerId,
+      },
+      include: {
+        artia: {
+          include: {
+            mandi: true,
+          }
+        },
+        mandi: true,
+      },
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Farmer profile not found');
+    }
+
+    let safeArtia = null;
+    if (profile.artia) {
+      const { password, ...artiaData } = profile.artia;
+      safeArtia = artiaData;
+    }
+
+    return {
+      artia: safeArtia,
+      mandi: profile.mandi,
+    };
+  }
+
+  async getRecentActivity(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const posts = await this.prisma.post.findMany({
+      where: { authorId: userId },
+      take: 5,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        _count: { select: { comments: true } }
+      }
+    });
+
+    const comments = await this.prisma.comment.findMany({
+      where: { authorId: userId },
+      take: 5,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        post: {
+          select: {
+            id: true,
+            title_en: true,
+            title_ur: true,
+          }
+        }
+      }
+    });
+
+    const prices = await this.prisma.price.findMany({
+      where: { userId },
+      take: 5,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const activities = [
+      ...posts.map(post => ({
+        id: post.id,
+        type: 'POST',
+        title: post.title_en || post.title_ur || 'Untitled Post',
+        createdAt: post.createdAt,
+        metadata: {
+          title_en: post.title_en,
+          title_ur: post.title_ur,
+          commentCount: post._count.comments
+        }
+      })),
+      ...comments.map(comment => ({
+        id: comment.id,
+        type: 'COMMENT',
+        title: `Commented on: ${comment.post?.title_en || comment.post?.title_ur || 'Untitled Post'}`,
+        createdAt: comment.createdAt,
+        metadata: {
+          postId: comment.postId,
+          content: comment.content
+        }
+      })),
+      ...prices.map(price => ({
+        id: price.id,
+        type: 'PRICE_UPDATE',
+        title: `Price update: PKR ${price.price}`,
+        createdAt: price.createdAt,
+        metadata: {
+          price: price.price,
+          unit: price.unit,
+          cropId: price.cropId,
+          mandiId: price.mandiId
+        }
+      }))
+    ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+     .slice(0, 4);
+
+    return activities;
   }
 }

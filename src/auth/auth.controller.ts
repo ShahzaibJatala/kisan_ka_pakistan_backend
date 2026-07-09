@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Query, Res } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import {
@@ -11,6 +11,7 @@ import {
   SuperAdminVerifyOtpDto,
 } from './dto/super-admin.dto';
 import type { Response } from 'express';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -37,6 +38,29 @@ export class AuthController {
     return this.authService.resetPassword(resetPasswordDto);
   }
 
+  /**
+   * POST /auth/refresh
+   * Body: { "refresh_token": "eyJ..." }
+   * Returns: { "access_token": "eyJ..." }
+   */
+  @Post('refresh')
+  async refresh(@Body('refresh_token') refreshToken: string) {
+    if (!refreshToken) {
+      return { message: 'refresh_token is required' };
+    }
+    return this.authService.refreshAccessToken(refreshToken);
+  }
+
+  /**
+   * POST /auth/logout
+   * Requires valid access token. Clears refresh token from DB.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(@Req() req: any) {
+    return this.authService.logout(req.user.id);
+  }
+
   @Get('dashboard-login')
   async dashboardLogin(@Query('token') token: string, @Res() res: Response) {
     const user = await this.authService.verifyDashboardLoginToken(token);
@@ -46,28 +70,25 @@ export class AuthController {
     // Set HTTP-only cookies for both access and refresh tokens
     res.cookie('access_token', accessToken, {
       httpOnly: true,
-      secure: false, // Set to true if HTTPS in production
-      maxAge: 3600000, // 1 hour
+      secure: false,
+      maxAge: 15 * 60 * 1000, // 15 minutes
       path: '/',
     });
     res.cookie('refresh_token', refreshToken, {
       httpOnly: true,
-      secure: false, // Set to true if HTTPS in production
+      secure: false,
       maxAge: 7 * 24 * 3600000, // 7 days
       path: '/',
     });
 
-    // Redirect to frontend dashboard with role-based path and only access token
+    // Redirect to frontend dashboard with role-based path
     let baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     if (baseUrl.endsWith('/')) {
       baseUrl = baseUrl.slice(0, -1);
     }
 
-    // Construct redirect URL: {baseUrl}/dashboard/{role}?accessToken=...
     const rolePath = user.role.toLowerCase().replace('_', '-');
-    const redirectUrl = baseUrl.endsWith('/')
-      ? `${baseUrl}/${rolePath}?accessToken=${accessToken}`
-      : `${baseUrl}/${rolePath}/dashboard?accessToken=${accessToken}`;
+    const redirectUrl = `${baseUrl}/${rolePath}/dashboard?accessToken=${accessToken}`;
 
     return res.redirect(redirectUrl);
   }
@@ -84,17 +105,16 @@ export class AuthController {
   ) {
     const result = await this.authService.superAdminVerifyOtp(dto);
 
-    // Set HTTP-only cookies for both access and refresh tokens
     res.cookie('access_token', result.accessToken, {
       httpOnly: true,
-      secure: false, // Set to true if HTTPS in production
-      maxAge: 3600000, // 1 hour
+      secure: false,
+      maxAge: 15 * 60 * 1000,
       path: '/',
     });
     res.cookie('refresh_token', result.refreshToken, {
       httpOnly: true,
-      secure: false, // Set to true if HTTPS in production
-      maxAge: 7 * 24 * 3600000, // 7 days
+      secure: false,
+      maxAge: 7 * 24 * 3600000,
       path: '/',
     });
 

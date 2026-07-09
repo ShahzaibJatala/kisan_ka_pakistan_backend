@@ -1,4 +1,14 @@
-import { Controller, Post, Get, Body, Req, UseGuards, Query } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Req,
+  UseGuards,
+  Query,
+  Param,
+  ParseIntPipe,
+} from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -18,7 +28,7 @@ export class UsersController {
   @Post('sadar')
   async createSadar(@Body() createUserDto: CreateUserDto, @Req() req: any) {
     let creator: { id: number; role: Role } | undefined;
-    
+
     const token = this.extractToken(req);
     if (token) {
       try {
@@ -85,5 +95,36 @@ export class UsersController {
       return req.cookies['access_token'];
     }
     return null;
+  }
+
+  // API to get all Artias for a Sadar
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.SADAR)
+  @Get('sadar/artias')
+  getSadarArtias(@Req() req: any) {
+    return this.usersService.getSadarArtias(req.user.id);
+  }
+
+  // API to get all Farmers for an Artia
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Get('artia/farmers')
+  getArtiaFarmers(@Req() req: any) {
+    return this.usersService.getArtiaFarmers(req.user.id);
+  }
+
+  // API to get the Artia (and Mandi) for a Farmer
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Get('farmer/artia')
+  getFarmerArtia(@Req() req: any) {
+    return this.usersService.getFarmerArtia(req.user.id);
+  }
+
+  // API to get recent activity of a user
+  @UseGuards(JwtAuthGuard)
+  @Get(':userId/activity')
+  getRecentActivity(@Param('userId', ParseIntPipe) userId: number) {
+    return this.usersService.getRecentActivity(userId);
   }
 }

@@ -44,4 +44,30 @@ export class PricesService {
     if (!price) throw new NotFoundException('Price not found');
     return price;
   }
+
+  async findLatestPrices() {
+    const allPrices = await this.prisma.price.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { id: true, name: true, role: true } }
+      }
+    });
+
+    const latestPricesMap = new Map<string, any>();
+    for (const price of allPrices) {
+      const key = price.cropId 
+        ? `id_${price.cropId}` 
+        : (price.name_en || price.name_ur || 'unknown').toLowerCase().trim();
+      
+      if (!latestPricesMap.has(key)) {
+        latestPricesMap.set(key, {
+          cropId: price.cropId,
+          cropName: price.name_en || price.name_ur || 'Unknown',
+          latestPrice: price
+        });
+      }
+    }
+
+    return Array.from(latestPricesMap.values());
+  }
 }
