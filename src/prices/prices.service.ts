@@ -3,12 +3,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreatePriceDto } from './dto/create-price.dto';
 import { UpdatePriceDto } from './dto/update-price.dto';
 import { PricesGateway } from './prices.gateway';
+import { RedisService } from '../redis/redis.service';
 
 @Injectable()
 export class PricesService {
   constructor(
     private prisma: PrismaService,
     private pricesGateway: PricesGateway,
+    private redisService: RedisService,
   ) {}
 
   async create(createPriceDto: CreatePriceDto, userId: number) {
@@ -16,6 +18,12 @@ export class PricesService {
       data: { ...createPriceDto, userId },
     });
     this.pricesGateway.emitPriceUpdate(price);
+
+    // Invalidate caches
+    await this.redisService.del('prices:latest');
+    await this.redisService.del('prices:crops:latest');
+    await this.redisService.del('home:feed');
+
     return price;
   }
 
@@ -25,18 +33,58 @@ export class PricesService {
       data: updateData,
     });
     this.pricesGateway.emitPriceUpdate(price);
+
+    // Invalidate caches
+    await this.redisService.del('prices:latest');
+    await this.redisService.del('prices:crops:latest');
+    await this.redisService.del('home:feed');
+
     return price;
   }
 
-  async findAll(district?: string, city?: string) {
+  async findAll(page: number = 1, limit: number = 10, district?: string, city?: string) {
+    const isFirstPageWithoutFilters = page === 1 && limit === 10 && !district && !city;
+    const cacheKey = 'prices:latest';
+
+    if (isFirstPageWithoutFilters) {
+      const cached = await this.redisService.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    }
+
+    const skip = (page - 1) * limit;
     const where: any = {};
     if (district) where.district = district;
     if (city) where.city = city;
-    return this.prisma.price.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' },
-      include: { user: { select: { name: true, role: true } } },
-    });
+
+    const [data, total] = await Promise.all([
+      this.prisma.price.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { updatedAt: 'desc' },
+        include: { user: { select: { name: true, role: true } } },
+      }),
+      this.prisma.price.count({ where }),
+    ]);
+
+    const result = {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+
+    if (isFirstPageWithoutFilters) {
+      // Cache the first page of prices for 5 minutes
+      await this.redisService.set(cacheKey, JSON.stringify(result), 300);
+    }
+
+    return result;
   }
 
   async findOne(id: number) {
@@ -46,6 +94,12 @@ export class PricesService {
   }
 
   async findLatestPrices() {
+    const cacheKey = 'prices:crops:latest';
+    const cached = await this.redisService.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
     const allPrices = await this.prisma.price.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
@@ -68,6 +122,11 @@ export class PricesService {
       }
     }
 
-    return Array.from(latestPricesMap.values());
+    const result = Array.from(latestPricesMap.values());
+
+    // Cache latest crop prices for 5 minutes
+    await this.redisService.set(cacheKey, JSON.stringify(result), 300);
+
+    return result;
   }
 }

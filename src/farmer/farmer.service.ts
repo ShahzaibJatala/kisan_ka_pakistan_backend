@@ -441,4 +441,101 @@ export class FarmerService {
 
     return { ...updated, balance };
   }
+
+  /**
+   * 11. Get or create personal ledger for an Artia (GET /farmers/personal-ledger)
+   */
+  async getOrCreatePersonalLedger(artiaId: number) {
+    let ledger = await this.prisma.personalLedger.findUnique({
+      where: { userId: artiaId },
+      include: {
+        transactions: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    if (!ledger) {
+      ledger = await this.prisma.personalLedger.create({
+        data: {
+          name: 'Personal Ledger',
+          userId: artiaId,
+        },
+        include: {
+          transactions: { orderBy: { createdAt: 'desc' } },
+        },
+      });
+    }
+
+    const balance = ledger.transactions.reduce((sum: number, tx: any) => {
+      return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+    }, 0);
+
+    return this.formatPersonalLedger(ledger, balance);
+  }
+
+  /**
+   * 12. Update personal ledger metadata (PATCH /farmers/personal-ledger)
+   */
+  async updatePersonalLedger(artiaId: number, dto: UpdateLedgerDto) {
+    const ledger = await this.prisma.personalLedger.findUnique({
+      where: { userId: artiaId },
+    });
+
+    if (!ledger) {
+      throw new NotFoundException('Personal ledger not found.');
+    }
+
+    const updated = await this.prisma.personalLedger.update({
+      where: { userId: artiaId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.description !== undefined && { description: dto.description }),
+      },
+      include: {
+        transactions: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    const balance = updated.transactions.reduce((sum: number, tx: any) => {
+      return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+    }, 0);
+
+    return this.formatPersonalLedger(updated, balance);
+  }
+
+  /**
+   * 13. Add transaction to personal ledger (POST /farmers/personal-ledger/transactions)
+   */
+  async addPersonalTransaction(artiaId: number, dto: AddTransactionDto) {
+    const ledger = await this.prisma.personalLedger.findUnique({
+      where: { userId: artiaId },
+    });
+
+    if (!ledger) {
+      throw new NotFoundException('Personal ledger not found.');
+    }
+
+    const transaction = await this.prisma.personalTransaction.create({
+      data: {
+        ledgerId: ledger.id,
+        amount: dto.amount,
+        type: dto.type,
+        description: dto.description || null,
+      },
+    });
+
+    return transaction;
+  }
+
+  private formatPersonalLedger(ledger: any, balance: number) {
+    return {
+      id: ledger.id,
+      name: ledger.name,
+      description: ledger.description,
+      userId: ledger.userId,
+      transactions: ledger.transactions || [],
+      createdAt: ledger.createdAt,
+      updatedAt: ledger.updatedAt,
+      balance,
+    };
+  }
 }

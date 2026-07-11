@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Req, UseGuards, Param, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Req, UseGuards, Param, ParseIntPipe, Query } from '@nestjs/common';
 import { PostsService } from './posts.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
@@ -12,8 +12,13 @@ export class PostsController {
   constructor(private readonly postsService: PostsService) {}
 
   @Get()
-  findAll() {
-    return this.postsService.findAll();
+  findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 10;
+    return this.postsService.findAll(pageNum, limitNum);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Param, UseGuards, ParseIntPipe } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  UseGuards,
+  ParseIntPipe,
+} from '@nestjs/common';
 import { MandiService } from './mandi.service';
 import { CreateMandiDto } from './dto/create-mandi.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -10,6 +18,8 @@ import { Role } from '@prisma/client';
 export class MandiController {
   constructor(private readonly mandiService: MandiService) {}
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.SUPER_ADMIN)
   @Post()
   create(@Body() createMandiDto: CreateMandiDto) {
     return this.mandiService.create(createMandiDto);

@@ -21,6 +21,7 @@ import {
   SuperAdminVerifyOtpDto,
 } from './dto/super-admin.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { Role, UserStatus } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
@@ -167,31 +168,7 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  /**
-   * Validate refresh token and return new access token.
-   * Checks: valid JWT, userId exists in DB, token matches saved hash.
-   */
-  async refreshAccessToken(refreshToken: string) {
-    let payload: any;
-    try {
-      payload = this.jwtService.verify(refreshToken);
-    } catch (e) {
-      throw new UnauthorizedException('Invalid or expired refresh token. Please login to your account.');
-    }
-
-    const userId = payload.sub;
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-
-    if (!user || !user.refreshToken) {
-      throw new UnauthorizedException('Session not found. Please login to your account.');
-    }
-
-    // Compare the incoming token with the hashed one stored in DB
-    const tokenMatches = await bcrypt.compare(refreshToken, user.refreshToken);
-    if (!tokenMatches) {
-      throw new UnauthorizedException('Refresh token is invalid. Please login to your account.');
-    }
-
+  async refreshAccessToken(user: any) {
     // Issue a new access token only (refresh token stays the same until logout)
     const accessPayload = {
       sub: user.id,
@@ -245,7 +222,7 @@ export class AuthService {
         (tenMinutes - (now - this.lastSuperAdminAttemptTime)) / 1000 / 60,
       );
       throw new HttpException(
-        `Rate limit exceeded. You can only request once every 10 minutes. Try again in ${remaining} minutes.`,
+        `Rate limit exceeded. Try again after ${remaining} minutes.`,
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
@@ -315,6 +292,81 @@ export class AuthService {
       },
       accessToken,
       refreshToken,
+    };
+  }
+
+  async googleLogin(idToken: string) {
+    if (!idToken) {
+      throw new BadRequestException('ID token is required.');
+    }
+
+    let payload: any;
+    try {
+      const response = await fetch(
+        `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`,
+      );
+      if (!response.ok) {
+        throw new BadRequestException('Invalid Google ID token.');
+      }
+      payload = await response.json();
+    } catch (e) {
+      throw new BadRequestException('Failed to verify Google ID token.');
+    }
+
+    const { email, name, picture } = payload;
+    if (!email) {
+      throw new BadRequestException('Google ID token missing email claim.');
+    }
+
+    // Find user by email
+    let user = await this.usersService.findByEmail(email);
+
+    if (!user) {
+      // Register new user as FARMER by default, status PENDING
+      const randomPassword = Math.random().toString(36).slice(-8);
+      const hashedPassword = await bcrypt.hash(randomPassword, 10);
+      
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          name: name || 'Google User',
+          password: hashedPassword,
+          role: Role.FARMER,
+          status: UserStatus.PENDING,
+          profileImage: picture,
+        },
+      });
+
+      // Create FarmerProfile
+      await this.prisma.farmerProfile.create({
+        data: {
+          userId: user.id,
+          artiaId: null,
+          mandiId: null,
+        },
+      });
+
+      // Send email alert to Super Admin ONLY on first registration
+      try {
+        const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'kisankapakistan.info@gmail.com';
+        await this.mailService.sendGoogleSignupAlert(superAdminEmail, user);
+      } catch (err) {
+        console.error('Failed to send Super Admin alert:', err);
+      }
+    }
+
+    const { accessToken, refreshToken } = await this.generateTokens(user);
+
+    return {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        phone: user.phone,
+        email: user.email,
+      },
     };
   }
 }

@@ -30,6 +30,8 @@ export class MailProcessor extends WorkerHost {
           return await this.handleSendVerificationSuccessMail(job.data);
         case 'sendSuperAdminOtpMail':
           return await this.handleSendSuperAdminOtpMail(job.data);
+        case 'sendGoogleSignupAlert':
+          return await this.handleSendGoogleSignupAlert(job.data);
         default:
           console.warn(`[MailProcessor] Unknown job name: ${job.name}`);
       }
@@ -177,6 +179,37 @@ export class MailProcessor extends WorkerHost {
 
     await this.transporter.sendMail({
       from: `"Kisan ka Pakistan Security" <${process.env.USER_EMAIL}>`,
+      to,
+      subject,
+      text,
+      html,
+      headers: {
+        'X-Entity-Ref-ID': Date.now().toString(),
+      },
+    });
+  }
+
+  private async handleSendGoogleSignupAlert(data: { to: string; user: any }) {
+    const { to, user } = data;
+    const subject = 'New User Registration (Google OAuth) - Kisan ka Pakistan';
+    const text = `A new user has registered using Google OAuth:\n\nName: ${user.name}\nEmail: ${user.email}\nRole: FARMER\n\nThis user's status is PENDING and requires verification.`;
+    const html = `
+      <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; max-width: 600px; margin: auto;">
+        <h2 style="color: #2E7D32;">New User Registration (Google OAuth)</h2>
+        <p>A new user has registered on the platform using Google OAuth:</p>
+        <table cellpadding="8" style="width: 100%; border-collapse: collapse;">
+          <tr><td><b>Name:</b></td><td>${user.name}</td></tr>
+          <tr><td><b>Email:</b></td><td>${user.email || 'N/A'}</td></tr>
+          <tr><td><b>Role:</b></td><td>FARMER</td></tr>
+        </table>
+        <p style="margin-top: 20px; font-size: 12px; color: #666;">
+          This user has been created with a PENDING state and requires standard verification.
+        </p>
+      </div>
+    `;
+
+    await this.transporter.sendMail({
+      from: `"Kisan ka Pakistan System" <${process.env.USER_EMAIL}>`,
       to,
       subject,
       text,

@@ -23,8 +23,15 @@ export class PricesController {
 
   // GUEST (public)
   @Get()
-  findAll(@Query('district') district?: string, @Query('city') city?: string) {
-    return this.pricesService.findAll(district, city);
+  findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('district') district?: string,
+    @Query('city') city?: string,
+  ) {
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 10;
+    return this.pricesService.findAll(pageNum, limitNum, district, city);
   }
 
   // GUEST (public)

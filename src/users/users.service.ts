@@ -32,9 +32,9 @@ export class UsersService {
         );
       }
     } else if (targetRole === Role.FARMER) {
-      if (creatorRole !== Role.ARTIA && creatorRole !== Role.SADAR) {
+      if (creatorRole !== Role.ARTIA) {
         throw new BadRequestException(
-          'Only an ARTIA (or SADAR) can create a FARMER account.',
+          'Only an ARTIA can create a FARMER account.',
         );
       }
     }
@@ -62,6 +62,16 @@ export class UsersService {
     const verifiedBy = isCreatedByUpperRole ? creatorId : null;
     const verifiedAt = isCreatedByUpperRole ? new Date() : null;
 
+    let finalMandiId = createUserDto.mandiId || null;
+    if (targetRole === Role.ARTIA && creatorId && !finalMandiId) {
+      const creator = await this.prisma.user.findUnique({
+        where: { id: creatorId },
+      });
+      if (creator && creator.role === Role.SADAR) {
+        finalMandiId = creator.mandiId;
+      }
+    }
+
     const user = await this.prisma.user.create({
       data: {
         name: createUserDto.name,
@@ -74,7 +84,7 @@ export class UsersService {
         profileImage: createUserDto.profileImage,
         address: createUserDto.address,
         city: createUserDto.city,
-        mandiId: createUserDto.mandiId,
+        mandiId: finalMandiId,
         createdBy: creatorId,
         verifiedBy: verifiedBy,
         verifiedAt: verifiedAt,
@@ -158,9 +168,9 @@ export class UsersService {
         );
       }
     } else if (requester.role === Role.FARMER) {
-      if (verifier.role !== Role.ARTIA && verifier.role !== Role.SADAR) {
+      if (verifier.role !== Role.ARTIA) {
         throw new BadRequestException(
-          'Farmer can only request verification from an Artia or Sadar',
+          'Farmer can only request verification from an Artia',
         );
       }
     } else if (requester.role === Role.SADAR) {
@@ -246,6 +256,18 @@ export class UsersService {
       throw new NotFoundException('User to be verified not found');
     }
 
+    const verifier = await this.prisma.user.findUnique({ where: { id: verifierId } });
+    if (!verifier) {
+      throw new NotFoundException('Verifier user not found');
+    }
+
+    if (user.role === Role.FARMER && verifier.role !== Role.ARTIA) {
+      throw new BadRequestException('Farmers can only be verified by an Artia.');
+    }
+    if (user.role === Role.ARTIA && verifier.role !== Role.SADAR) {
+      throw new BadRequestException('Artias can only be verified by a Sadar.');
+    }
+
     if (user.status === UserStatus.VERIFIED) {
       return { message: 'User is already verified' };
     }
@@ -320,6 +342,25 @@ export class UsersService {
     // Mandi is required for Sadar
     if (!createUserDto.mandiId) {
       throw new BadRequestException('mandiId is required. A Sadar must belong to a Mandi.');
+    }
+
+    // Verify Mandi exists in the database
+    const mandi = await this.prisma.mandi.findUnique({
+      where: { id: createUserDto.mandiId },
+    });
+    if (!mandi) {
+      throw new BadRequestException('The specified Mandi does not exist.');
+    }
+
+    // Validate Sadar address matches Mandi name and city matches Mandi city
+    const isCityMatch = createUserDto.city && mandi.city &&
+      createUserDto.city.trim().toLowerCase() === mandi.city.trim().toLowerCase();
+
+    const isAddressMatch = createUserDto.address && mandi.name &&
+      createUserDto.address.trim().toLowerCase() === mandi.name.trim().toLowerCase();
+
+    if (!isCityMatch || !isAddressMatch) {
+      throw new BadRequestException('Address or city are not correct');
     }
 
     if (createUserDto.phone) {
@@ -410,10 +451,30 @@ export class UsersService {
   }
 
   async getSadarArtias(sadarId: number) {
-    const artias = await this.prisma.user.findMany({
+    const sadar = await this.prisma.user.findUnique({
+      where: { id: sadarId },
+    });
+
+    if (!sadar || !sadar.mandiId) {
+      return { count: 0, artias: [] };
+    }
+
+    // Self-healing query: link any null mandiId Artias created by this Sadar to this Mandi
+    await this.prisma.user.updateMany({
       where: {
         role: Role.ARTIA,
         createdBy: sadarId,
+        mandiId: null,
+      },
+      data: {
+        mandiId: sadar.mandiId,
+      },
+    });
+
+    const artias = await this.prisma.user.findMany({
+      where: {
+        role: Role.ARTIA,
+        mandiId: sadar.mandiId,
       },
       include: {
         mandi: true,

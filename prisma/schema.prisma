@@ -65,6 +65,9 @@ model User {
   // A User can have one FarmerProfile (1-to-1)
   farmerProfile FarmerProfile? @relation("UserFarmerProfile")
   
+  // An Artia can have one PersonalLedger (1-to-1)
+  personalLedger PersonalLedger? @relation("UserPersonalLedger")
+  
   // If this user is an Artia, they can manage many farmers (1-to-many)
   artiaFarmers  FarmerProfile[] @relation("ArtiaToFarmers")
 
@@ -194,5 +197,27 @@ model Comment {
   author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model PersonalLedger {
+  id           Int                   @id @default(autoincrement())
+  name         String                @default("Personal Ledger")
+  description  String?
+  userId       Int                   @unique
+  user         User                  @relation("UserPersonalLedger", fields: [userId], references: [id], onDelete: Cascade)
+  transactions PersonalTransaction[]
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+}
+
+model PersonalTransaction {
+  id          Int            @id @default(autoincrement())
+  ledgerId    Int
+  ledger      PersonalLedger @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+  amount      Float
+  type        String         // CREDIT or DEBIT
+  description String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 }
 

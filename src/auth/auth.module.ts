@@ -5,6 +5,7 @@ import { UsersModule } from '../users/users.module';
 import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
 import { MailModule } from 'src/mail/mail.module';
 import { PrismaModule } from '../prisma/prisma.module';
 
@@ -19,7 +20,7 @@ import { PrismaModule } from '../prisma/prisma.module';
       signOptions: { expiresIn: '7d' },
     }),
   ],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, JwtRefreshStrategy],
   controllers: [AuthController],
 })
 export class AuthModule {}

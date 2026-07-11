@@ -1,0 +1,2 @@
+-- This migration was rolled back due to existing NULL values in phone/email columns.
+-- No schema changes are applied. Fields remain nullable as per the current schema.

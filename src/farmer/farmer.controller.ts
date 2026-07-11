@@ -85,6 +85,36 @@ export class FarmerController {
 
   // ─── ARTIA ROUTES (static paths MUST come before parameterized paths) ─────
 
+  /** GET /farmers/personal-ledger — Fetch Artia's personal ledger */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Get('personal-ledger')
+  async getPersonalLedger(@Req() req: RequestWithUser) {
+    return this.farmerService.getOrCreatePersonalLedger(req.user.id);
+  }
+
+  /** PATCH /farmers/personal-ledger — Update Artia's personal ledger name/description */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Patch('personal-ledger')
+  async updatePersonalLedger(
+    @Req() req: RequestWithUser,
+    @Body() updateLedgerDto: UpdateLedgerDto,
+  ) {
+    return this.farmerService.updatePersonalLedger(req.user.id, updateLedgerDto);
+  }
+
+  /** POST /farmers/personal-ledger/transactions — Add transaction to personal ledger */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Post('personal-ledger/transactions')
+  async addPersonalTransaction(
+    @Req() req: RequestWithUser,
+    @Body() addTransactionDto: AddTransactionDto,
+  ) {
+    return this.farmerService.addPersonalTransaction(req.user.id, addTransactionDto);
+  }
+
   /** GET /farmers/artia/dashboard — Artia sees all farmers + their ledgers */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ARTIA)

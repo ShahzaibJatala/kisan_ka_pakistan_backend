@@ -53,9 +53,9 @@ export class UsersController {
     return this.usersService.create(createUserDto, req.user.role, req.user.id);
   }
 
-  // FARMER created by ARTIA (or SADAR optionally)
+  // FARMER created by ARTIA
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.SADAR, Role.ARTIA)
+  @Roles(Role.ARTIA)
   @Post('farmer')
   createFarmer(@Body() createUserDto: CreateUserDto, @Req() req: any) {
     createUserDto.role = Role.FARMER;

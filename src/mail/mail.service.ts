@@ -47,4 +47,14 @@ export class MailService {
       throw new InternalServerErrorException('Failed to enqueue Super Admin 2FA email');
     }
   }
+
+  async sendGoogleSignupAlert(to: string, user: any) {
+    try {
+      await this.mailQueue.add('sendGoogleSignupAlert', { to, user });
+      return { success: true };
+    } catch (error) {
+      console.error('Mail Queue Error:', error);
+      throw new InternalServerErrorException('Failed to enqueue Google signup alert email');
+    }
+  }
 }

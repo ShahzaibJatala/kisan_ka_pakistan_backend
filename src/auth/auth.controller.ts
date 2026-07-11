@@ -11,6 +11,7 @@ import {
   SuperAdminVerifyOtpDto,
 } from './dto/super-admin.dto';
 import type { Response } from 'express';
+import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
@@ -18,9 +19,42 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
-  async login(@Body() loginDto: LoginDto) {
+  async login(
+    @Body() loginDto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const user = await this.authService.validateUser(loginDto);
-    return this.authService.login(user);
+    const result = await this.authService.login(user);
+
+    // Set refresh token in httpOnly cookie
+    res.cookie('refresh_token', result.refresh_token, {
+      httpOnly: true,
+      secure: false, // Set to true in production if using HTTPS
+      maxAge: 7 * 24 * 3600000, // 7 days
+      path: '/',
+    });
+
+    const { refresh_token, ...responseBody } = result;
+    return responseBody;
+  }
+
+  @Post('google')
+  async googleLogin(
+    @Body('idToken') idToken: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.googleLogin(idToken);
+
+    // Set refresh token in httpOnly cookie
+    res.cookie('refresh_token', result.refresh_token, {
+      httpOnly: true,
+      secure: false, // Set to true in production if using HTTPS
+      maxAge: 7 * 24 * 3600000, // 7 days
+      path: '/',
+    });
+
+    const { refresh_token, ...responseBody } = result;
+    return responseBody;
   }
 
   @Post('send-otp')
@@ -43,12 +77,10 @@ export class AuthController {
    * Body: { "refresh_token": "eyJ..." }
    * Returns: { "access_token": "eyJ..." }
    */
+  @UseGuards(JwtRefreshGuard)
   @Post('refresh')
-  async refresh(@Body('refresh_token') refreshToken: string) {
-    if (!refreshToken) {
-      return { message: 'refresh_token is required' };
-    }
-    return this.authService.refreshAccessToken(refreshToken);
+  async refresh(@Req() req: any) {
+    return this.authService.refreshAccessToken(req.user);
   }
 
   /**
@@ -57,7 +89,11 @@ export class AuthController {
    */
   @UseGuards(JwtAuthGuard)
   @Post('logout')
-  async logout(@Req() req: any) {
+  async logout(
+    @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.clearCookie('refresh_token', { path: '/' });
     return this.authService.logout(req.user.id);
   }
 
@@ -122,7 +158,6 @@ export class AuthController {
       message: result.message,
       user: result.user,
       accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
     });
   }
 }
