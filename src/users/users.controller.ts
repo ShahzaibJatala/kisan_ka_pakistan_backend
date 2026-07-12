@@ -16,6 +16,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/roles/roles.decorator';
 import { Role } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
+import { RateLimiterGuard } from '../auth/guards/rate-limiter.guard';
 
 @Controller('users')
 export class UsersController {
@@ -25,6 +26,7 @@ export class UsersController {
   ) {}
 
   // Open endpoint supporting both SUPER_ADMIN creation & user self-registration
+  @UseGuards(RateLimiterGuard)
   @Post('sadar')
   async createSadar(@Body() createUserDto: CreateUserDto, @Req() req: any) {
     let creator: { id: number; role: Role } | undefined;

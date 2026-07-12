@@ -42,8 +42,8 @@ export class PricesService {
     return price;
   }
 
-  async findAll(page: number = 1, limit: number = 10, district?: string, city?: string) {
-    const isFirstPageWithoutFilters = page === 1 && limit === 10 && !district && !city;
+  async findAll(page: number = 1, limit: number = 10, district?: string, city?: string, product?: string) {
+    const isFirstPageWithoutFilters = page === 1 && limit === 10 && !district && !city && !product;
     const cacheKey = 'prices:latest';
 
     if (isFirstPageWithoutFilters) {
@@ -57,6 +57,12 @@ export class PricesService {
     const where: any = {};
     if (district) where.district = district;
     if (city) where.city = city;
+    if (product) {
+      where.OR = [
+        { name_en: { contains: product, mode: 'insensitive' } },
+        { name_ur: { contains: product, mode: 'insensitive' } },
+      ];
+    }
 
     const [data, total] = await Promise.all([
       this.prisma.price.findMany({

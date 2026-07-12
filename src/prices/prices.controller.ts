@@ -28,10 +28,11 @@ export class PricesController {
     @Query('limit') limit?: string,
     @Query('district') district?: string,
     @Query('city') city?: string,
+    @Query('product') product?: string,
   ) {
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 10;
-    return this.pricesService.findAll(pageNum, limitNum, district, city);
+    return this.pricesService.findAll(pageNum, limitNum, district, city, product);
   }
 
   // GUEST (public)

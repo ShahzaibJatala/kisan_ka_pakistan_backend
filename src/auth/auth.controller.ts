@@ -13,11 +13,13 @@ import {
 import type { Response } from 'express';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RateLimiterGuard } from './guards/rate-limiter.guard';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @UseGuards(RateLimiterGuard)
   @Post('login')
   async login(
     @Body() loginDto: LoginDto,

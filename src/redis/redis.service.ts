@@ -55,4 +55,22 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       console.error(`[RedisService] Del error for key ${key}:`, e);
     }
   }
+
+  async incr(key: string): Promise<number> {
+    try {
+      return await this.client.incr(key);
+    } catch (e) {
+      console.error(`[RedisService] Incr error for key ${key}:`, e);
+      throw e;
+    }
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    try {
+      await this.client.expire(key, seconds);
+    } catch (e) {
+      console.error(`[RedisService] Expire error for key ${key}:`, e);
+      throw e;
+    }
+  }
 }
