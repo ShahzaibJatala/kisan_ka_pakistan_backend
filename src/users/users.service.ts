@@ -261,11 +261,13 @@ export class UsersService {
       throw new NotFoundException('Verifier user not found');
     }
 
-    if (user.role === Role.FARMER && verifier.role !== Role.ARTIA) {
-      throw new BadRequestException('Farmers can only be verified by an Artia.');
-    }
-    if (user.role === Role.ARTIA && verifier.role !== Role.SADAR) {
-      throw new BadRequestException('Artias can only be verified by a Sadar.');
+    if (verifier.role !== Role.SUPER_ADMIN) {
+      if (user.role === Role.FARMER && verifier.role !== Role.ARTIA) {
+        throw new BadRequestException('Farmers can only be verified by an Artia.');
+      }
+      if (user.role === Role.ARTIA && verifier.role !== Role.SADAR) {
+        throw new BadRequestException('Artias can only be verified by a Sadar.');
+      }
     }
 
     if (user.status === UserStatus.VERIFIED) {
@@ -620,5 +622,207 @@ export class UsersService {
      .slice(0, 4);
 
     return activities;
+  }
+
+  async getIndependentFarmers(search?: string) {
+    const whereClause: any = {
+      role: Role.FARMER,
+      status: UserStatus.VERIFIED,
+      farmerProfile: {
+        artiaId: null,
+      },
+    };
+
+    if (search) {
+      whereClause.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    return this.prisma.user.findMany({
+      where: whereClause,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        city: true,
+        address: true,
+      },
+    });
+  }
+
+  async createConnectionRequest(artiaId: number, farmerId: number) {
+    const farmer = await this.prisma.user.findUnique({
+      where: { id: farmerId },
+      include: { farmerProfile: true },
+    });
+
+    if (!farmer || farmer.role !== Role.FARMER) {
+      throw new BadRequestException('User is not a farmer.');
+    }
+
+    if (farmer.status !== UserStatus.VERIFIED) {
+      throw new BadRequestException('Farmer is not verified.');
+    }
+
+    if (farmer.farmerProfile?.artiaId) {
+      throw new BadRequestException('Farmer is already connected to an Artia.');
+    }
+
+    return this.prisma.connectionRequest.upsert({
+      where: {
+        artiaId_farmerId: {
+          artiaId,
+          farmerId,
+        },
+      },
+      update: {
+        status: 'PENDING',
+      },
+      create: {
+        artiaId,
+        farmerId,
+        status: 'PENDING',
+      },
+    });
+  }
+
+  async getConnectionRequests(userId: number, role: Role) {
+    if (role === Role.FARMER) {
+      const reqs = await this.prisma.connectionRequest.findMany({
+        where: {
+          farmerId: userId,
+          status: 'PENDING',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Get Artia details
+      const artiaIds = reqs.map((r: any) => r.artiaId);
+      const artias = await this.prisma.user.findMany({
+        where: { id: { in: artiaIds } },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          mandi: {
+            select: {
+              name: true,
+              city: true,
+            },
+          },
+        },
+      });
+
+      return reqs.map((r: any) => {
+        const artia = artias.find((a) => a.id === r.artiaId);
+        return {
+          ...r,
+          artia,
+        };
+      });
+    } else {
+      const reqs = await this.prisma.connectionRequest.findMany({
+        where: {
+          artiaId: userId,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Get Farmer details
+      const farmerIds = reqs.map((r: any) => r.farmerId);
+      const farmers = await this.prisma.user.findMany({
+        where: { id: { in: farmerIds } },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+        },
+      });
+
+      return reqs.map((r: any) => {
+        const farmer = farmers.find((f) => f.id === r.farmerId);
+        return {
+          ...r,
+          farmer,
+        };
+      });
+    }
+  }
+
+  async acceptConnectionRequest(requestId: number, farmerId: number) {
+    const request = await this.prisma.connectionRequest.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request || request.farmerId !== farmerId || request.status !== 'PENDING') {
+      throw new BadRequestException('Invalid connection request.');
+    }
+
+    const artia = await this.prisma.user.findUnique({
+      where: { id: request.artiaId },
+    });
+
+    if (!artia) {
+      throw new BadRequestException('Artia not found.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Accept request
+      await tx.connectionRequest.update({
+        where: { id: requestId },
+        data: { status: 'ACCEPTED' },
+      });
+
+      // 2. Reject other requests for this farmer
+      await tx.connectionRequest.updateMany({
+        where: {
+          farmerId,
+          status: 'PENDING',
+        },
+        data: { status: 'REJECTED' },
+      });
+
+      // 3. Connect farmer to Artia's profile & Mandi
+      await tx.farmerProfile.update({
+        where: { userId: farmerId },
+        data: {
+          artiaId: request.artiaId,
+          mandiId: artia.mandiId,
+        },
+      });
+
+      // 4. Update mandiId on base User model
+      await tx.user.update({
+        where: { id: farmerId },
+        data: {
+          mandiId: artia.mandiId,
+        },
+      });
+
+      return { success: true };
+    });
+  }
+
+  async rejectConnectionRequest(requestId: number, farmerId: number) {
+    const request = await this.prisma.connectionRequest.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request || request.farmerId !== farmerId || request.status !== 'PENDING') {
+      throw new BadRequestException('Invalid connection request.');
+    }
+
+    await this.prisma.connectionRequest.update({
+      where: { id: requestId },
+      data: { status: 'REJECTED' },
+    });
+
+    return { success: true };
   }
 }

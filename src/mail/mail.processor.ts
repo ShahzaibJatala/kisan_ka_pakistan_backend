@@ -189,10 +189,10 @@ export class MailProcessor extends WorkerHost {
     });
   }
 
-  private async handleSendGoogleSignupAlert(data: { to: string; user: any }) {
-    const { to, user } = data;
+  private async handleSendGoogleSignupAlert(data: { to: string; user: any; verifyUrl: string }) {
+    const { to, user, verifyUrl } = data;
     const subject = 'New User Registration (Google OAuth) - Kisan ka Pakistan';
-    const text = `A new user has registered using Google OAuth:\n\nName: ${user.name}\nEmail: ${user.email}\nRole: FARMER\n\nThis user's status is PENDING and requires verification.`;
+    const text = `A new user has registered using Google OAuth:\n\nName: ${user.name}\nEmail: ${user.email}\nRole: FARMER\n\nVerify this account using the link below:\n${verifyUrl}`;
     const html = `
       <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; max-width: 600px; margin: auto;">
         <h2 style="color: #2E7D32;">New User Registration (Google OAuth)</h2>
@@ -202,8 +202,11 @@ export class MailProcessor extends WorkerHost {
           <tr><td><b>Email:</b></td><td>${user.email || 'N/A'}</td></tr>
           <tr><td><b>Role:</b></td><td>FARMER</td></tr>
         </table>
+        <div style="margin-top: 30px; text-align: center;">
+          <a href="${verifyUrl}" style="background-color: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block;">Verify User Now</a>
+        </div>
         <p style="margin-top: 20px; font-size: 12px; color: #666;">
-          This user has been created with a PENDING state and requires standard verification.
+          This user has been created with a PENDING state. Click the button above to verify them.
         </p>
       </div>
     `;

@@ -48,9 +48,9 @@ export class MailService {
     }
   }
 
-  async sendGoogleSignupAlert(to: string, user: any) {
+  async sendGoogleSignupAlert(to: string, user: any, verifyUrl: string) {
     try {
-      await this.mailQueue.add('sendGoogleSignupAlert', { to, user });
+      await this.mailQueue.add('sendGoogleSignupAlert', { to, user, verifyUrl });
       return { success: true };
     } catch (error) {
       console.error('Mail Queue Error:', error);

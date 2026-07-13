@@ -221,3 +221,14 @@ model PersonalTransaction {
   updatedAt   DateTime       @updatedAt
 }
 
+model ConnectionRequest {
+  id        Int      @id @default(autoincrement())
+  artiaId   Int
+  farmerId  Int
+  status    String   @default("PENDING") // PENDING, ACCEPTED, REJECTED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([artiaId, farmerId])
+}
+

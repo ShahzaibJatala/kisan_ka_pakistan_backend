@@ -150,6 +150,7 @@ export class AuthService {
       email: user.email,
       phone: user.phone,
       role: user.role,
+      status: user.status,
     };
 
     // Refresh token contains ONLY the userId for security
@@ -349,7 +350,21 @@ export class AuthService {
       // Send email alert to Super Admin ONLY on first registration
       try {
         const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'kisankapakistan.info@gmail.com';
-        await this.mailService.sendGoogleSignupAlert(superAdminEmail, user);
+        let superAdmin = await this.prisma.user.findFirst({
+          where: { role: Role.SUPER_ADMIN },
+        });
+        if (!superAdmin) {
+          superAdmin = await this.usersService.findOrCreateSuperAdmin(superAdminEmail, 'Super Admin');
+        }
+
+        const token = this.jwtService.sign(
+          { type: 'confirm-verification', userId: user.id, verifierId: superAdmin.id },
+          { expiresIn: '7d' },
+        );
+        const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001';
+        const verifyUrl = `${backendUrl}/users/confirm-verification?token=${token}`;
+
+        await this.mailService.sendGoogleSignupAlert(superAdminEmail, user, verifyUrl);
       } catch (err) {
         console.error('Failed to send Super Admin alert:', err);
       }

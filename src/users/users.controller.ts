@@ -129,4 +129,43 @@ export class UsersController {
   getRecentActivity(@Param('userId', ParseIntPipe) userId: number) {
     return this.usersService.getRecentActivity(userId);
   }
+
+  // Get verified independent farmers (available to Artias)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Get('independent-farmers')
+  getIndependentFarmers(@Query('search') search?: string) {
+    return this.usersService.getIndependentFarmers(search);
+  }
+
+  // Artia requests to connect with/import an independent farmer
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Post('import-farmer')
+  importFarmer(@Body('farmerId', ParseIntPipe) farmerId: number, @Req() req: any) {
+    return this.usersService.createConnectionRequest(req.user.id, farmerId);
+  }
+
+  // Get active connection requests (for notifications)
+  @UseGuards(JwtAuthGuard)
+  @Get('connection-requests')
+  getConnectionRequests(@Req() req: any) {
+    return this.usersService.getConnectionRequests(req.user.id, req.user.role);
+  }
+
+  // Farmer accepts connection request
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Post('connection-requests/:requestId/accept')
+  acceptConnection(@Param('requestId', ParseIntPipe) requestId: number, @Req() req: any) {
+    return this.usersService.acceptConnectionRequest(requestId, req.user.id);
+  }
+
+  // Farmer rejects connection request
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Post('connection-requests/:requestId/reject')
+  rejectConnection(@Param('requestId', ParseIntPipe) requestId: number, @Req() req: any) {
+    return this.usersService.rejectConnectionRequest(requestId, req.user.id);
+  }
 }
