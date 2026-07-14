@@ -14,6 +14,7 @@ import type { Response } from 'express';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RateLimiterGuard } from './guards/rate-limiter.guard';
+import { OtpRateLimiterGuard } from './guards/otp-rate-limiter.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -59,6 +60,7 @@ export class AuthController {
     return responseBody;
   }
 
+  @UseGuards(OtpRateLimiterGuard)
   @Post('send-otp')
   async sendOtp(@Body() sendOtpDto: SendOtpDto) {
     return this.authService.sendOTP(sendOtpDto);

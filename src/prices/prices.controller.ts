@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/roles/roles.decorator';
 import { Role } from '@prisma/client';
+import { PriceRateLimiterGuard } from '../auth/guards/price-rate-limiter.guard';
 
 @Controller('prices')
 export class PricesController {
@@ -47,8 +48,8 @@ export class PricesController {
     return this.pricesService.findOne(+id);
   }
 
-  // Guarded
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  // Guarded: authenticated + role + price rate limit (5 posts/user/hour)
+  @UseGuards(JwtAuthGuard, RolesGuard, PriceRateLimiterGuard)
   @Roles(Role.SADAR, Role.ARTIA, Role.FARMER)
   @Post()
   create(@Body() createPriceDto: CreatePriceDto, @Req() req: any) {

@@ -73,4 +73,33 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       throw e;
     }
   }
+
+  async ttl(key: string): Promise<number> {
+    try {
+      return await this.client.ttl(key);
+    } catch (e) {
+      console.error(`[RedisService] TTL error for key ${key}:`, e);
+      return -1;
+    }
+  }
+
+  /**
+   * Delete all keys matching a glob pattern using SCAN (non-blocking).
+   * Example: delByPattern('artia:profile:*')
+   */
+  async delByPattern(pattern: string): Promise<void> {
+    try {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          await this.client.del(...keys);
+        }
+      } while (cursor !== '0');
+    } catch (e) {
+      console.error(`[RedisService] DelByPattern error for pattern ${pattern}:`, e);
+    }
+  }
 }
+

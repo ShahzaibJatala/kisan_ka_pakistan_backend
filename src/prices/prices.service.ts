@@ -130,8 +130,8 @@ export class PricesService {
 
     const result = Array.from(latestPricesMap.values());
 
-    // Cache latest crop prices for 5 minutes
-    await this.redisService.set(cacheKey, JSON.stringify(result), 300);
+    // Cache latest crop prices for 10 minutes
+    await this.redisService.set(cacheKey, JSON.stringify(result), 600);
 
     return result;
   }

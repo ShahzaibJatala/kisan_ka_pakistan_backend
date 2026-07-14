@@ -11,6 +11,11 @@ import * as bcrypt from 'bcrypt';
 import { Role, UserStatus } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../mail/mail.service';
+import { RedisService } from '../redis/redis.service';
+
+// Cache TTL constants
+const ARTIA_PROFILE_TTL = 86400;  // 24 hours
+const ARTIA_LIST_TTL   = 108000; // 30 hours
 
 @Injectable()
 export class UsersService {
@@ -18,6 +23,7 @@ export class UsersService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private mailService: MailService,
+    private redisService: RedisService,
   ) {}
 
   async create(
@@ -284,6 +290,11 @@ export class UsersService {
         verifiedAt: new Date(),
       },
     });
+
+    // If an Artia was just verified, invalidate the public Artia directory cache
+    if (user.role === Role.ARTIA) {
+      await this.redisService.del('artia:list:public');
+    }
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
@@ -846,6 +857,12 @@ export class UsersService {
       data: dto,
     });
 
+    // Invalidate Artia profile + directory caches so next request gets fresh data
+    await Promise.all([
+      this.redisService.del(`artia:profile:${artiaId}`),
+      this.redisService.del('artia:list:public'),
+    ]);
+
     // 1. Send profile update email to Super Admin
     const artiaUser = await this.prisma.user.findUnique({
       where: { id: artiaId },
@@ -963,6 +980,14 @@ export class UsersService {
   }
 
   async getPublicArtiaProfile(artiaId: number) {
+    const cacheKey = `artia:profile:${artiaId}`;
+
+    // Cache-aside: return cached data if available
+    const cached = await this.redisService.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
     const artia = await this.prisma.user.findFirst({
       where: { id: artiaId, role: Role.ARTIA },
       select: {
@@ -1006,12 +1031,17 @@ export class UsersService {
       farmerDetails = consented.map((c) => c.user);
     }
 
-    return {
+    const result = {
       artia,
       profile,
       farmerCount: profile.showFarmerCount ? farmerCount : null,
       farmerDetails,
     };
+
+    // Store in Redis for 24 hours (ARTIA_PROFILE_TTL)
+    await this.redisService.set(cacheKey, JSON.stringify(result), ARTIA_PROFILE_TTL);
+
+    return result;
   }
 
   async getPublicFarmerProfile(farmerUserId: number, requesterRole?: Role) {
@@ -1054,7 +1084,15 @@ export class UsersService {
   }
 
   async getPublicArtiaList() {
-    return this.prisma.user.findMany({
+    const cacheKey = 'artia:list:public';
+
+    // Cache-aside: return cached list if available
+    const cached = await this.redisService.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    const result = await this.prisma.user.findMany({
       where: {
         role: Role.ARTIA,
         status: UserStatus.VERIFIED,
@@ -1080,5 +1118,10 @@ export class UsersService {
         },
       },
     });
+
+    // Store in Redis for 30 hours (ARTIA_LIST_TTL)
+    await this.redisService.set(cacheKey, JSON.stringify(result), ARTIA_LIST_TTL);
+
+    return result;
   }
 }
