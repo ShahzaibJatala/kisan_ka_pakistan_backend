@@ -929,7 +929,7 @@ export class UsersService {
       throw new NotFoundException('Farmer profile not found');
     }
 
-    return this.prisma.farmerProfile.update({
+    const updated = await this.prisma.farmerProfile.update({
       where: { userId: farmerUserId },
       data: {
         shareInCount: dto.shareInCount !== undefined ? dto.shareInCount : undefined,
@@ -937,6 +937,13 @@ export class UsersService {
         showOwnDetailsPublicly: dto.showOwnDetailsPublicly !== undefined ? dto.showOwnDetailsPublicly : undefined,
       },
     });
+
+    // Invalidate the connected Artia's public profile cache so changes are reflected immediately
+    if (profile.artiaId) {
+      await this.redisService.del(`artia:profile:${profile.artiaId}`);
+    }
+
+    return updated;
   }
 
   async getNotifications(userId: number) {
@@ -962,6 +969,12 @@ export class UsersService {
       throw new NotFoundException('Notification not found');
     }
 
+    // Fetch the farmer profile to get the connected artiaId for cache invalidation
+    const farmerProfile = await this.prisma.farmerProfile.findUnique({
+      where: { userId },
+      select: { artiaId: true },
+    });
+
     // Update privacy preferences on farmer profile
     await this.prisma.farmerProfile.update({
       where: { userId },
@@ -975,6 +988,11 @@ export class UsersService {
     await this.prisma.notification.delete({
       where: { id: notificationId },
     });
+
+    // Invalidate the Artia's public profile cache so the change is reflected immediately
+    if (farmerProfile?.artiaId) {
+      await this.redisService.del(`artia:profile:${farmerProfile.artiaId}`);
+    }
 
     return { success: true };
   }
