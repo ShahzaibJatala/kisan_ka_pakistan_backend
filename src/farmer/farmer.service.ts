@@ -334,6 +334,13 @@ export class FarmerService {
         amount: dto.amount,
         type: dto.type,
         description: dto.description || null,
+        crop: dto.crop || null,
+        quantity: dto.quantity !== undefined ? dto.quantity : null,
+        rate: dto.rate !== undefined ? dto.rate : null,
+        gross: dto.gross !== undefined ? dto.gross : null,
+        commission: dto.commission !== undefined ? dto.commission : null,
+        expenses: dto.expenses !== undefined ? dto.expenses : null,
+        net: dto.net !== undefined ? dto.net : null,
       },
     });
 

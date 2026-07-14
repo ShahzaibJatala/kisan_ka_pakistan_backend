@@ -63,13 +63,17 @@ model User {
 
   // --- Role-Specific Profile Links ---
   // A User can have one FarmerProfile (1-to-1)
+  // A User can have one ArtiaProfile (1-to-1)
   farmerProfile FarmerProfile? @relation("UserFarmerProfile")
+  artiaProfile  ArtiaProfile?
   
   // An Artia can have one PersonalLedger (1-to-1)
   personalLedger PersonalLedger? @relation("UserPersonalLedger")
   
   // If this user is an Artia, they can manage many farmers (1-to-many)
   artiaFarmers  FarmerProfile[] @relation("ArtiaToFarmers")
+
+  notifications Notification[]
 
   // Existing standard relations
   posts         Post[]
@@ -135,8 +139,10 @@ model FarmerProfile {
   landSize           Float?    // Represented as a Float for acres/hectares
 
   // Privacy & Consent
-  showOnArtiaProfile Boolean   @default(false)
-  consentUpdatedAt   DateTime?
+  showOnArtiaProfile      Boolean   @default(false)
+  shareInCount            Boolean   @default(false)
+  showOwnDetailsPublicly  Boolean   @default(false)
+  consentUpdatedAt        DateTime?
 
   // --- Future Relations ---
   // primaryCrops    Crop[]?    // Add this implicit many-to-many relation once you build the Crop model
@@ -167,6 +173,16 @@ model Transaction {
   amount       Float
   type         String       // CREDIT or DEBIT
   description  String?
+
+  // Patti receipt details
+  crop         String?
+  quantity     Float?
+  rate         Float?
+  gross        Float?
+  commission   Float?
+  expenses     Float?
+  net          Float?
+
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 }
@@ -230,5 +246,33 @@ model ConnectionRequest {
   updatedAt DateTime @updatedAt
 
   @@unique([artiaId, farmerId])
+}
+
+model ArtiaProfile {
+  id                 Int      @id @default(autoincrement())
+  userId             Int      @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shopName           String?
+  shopPhone          String?
+  address            String?
+  commissionRules    String?  // JSON stringified commission rules
+  showFarmerCount    Boolean  @default(false)
+  showFarmerDetails  Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int      // Recipient user id
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // E.g. "CONSENT_REQUEST", "INFO"
+  title_en  String
+  title_ur  String
+  body_en   String
+  body_ur   String
+  metadata  String?  // JSON with extra info e.g. { "artiaId": 3 }
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
 }
 

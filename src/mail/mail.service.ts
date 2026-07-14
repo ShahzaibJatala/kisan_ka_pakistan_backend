@@ -57,4 +57,14 @@ export class MailService {
       throw new InternalServerErrorException('Failed to enqueue Google signup alert email');
     }
   }
+
+  async sendArtiaProfileUpdateMail(to: string, artiaName: string, shopDetails: any) {
+    try {
+      await this.mailQueue.add('sendArtiaProfileUpdateMail', { to, artiaName, shopDetails });
+      return { success: true };
+    } catch (error) {
+      console.error('Mail Queue Error:', error);
+      throw new InternalServerErrorException('Failed to enqueue Artia profile update email');
+    }
+  }
 }

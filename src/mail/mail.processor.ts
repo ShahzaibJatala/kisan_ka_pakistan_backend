@@ -32,6 +32,8 @@ export class MailProcessor extends WorkerHost {
           return await this.handleSendSuperAdminOtpMail(job.data);
         case 'sendGoogleSignupAlert':
           return await this.handleSendGoogleSignupAlert(job.data);
+        case 'sendArtiaProfileUpdateMail':
+          return await this.handleSendArtiaProfileUpdateMail(job.data);
         default:
           console.warn(`[MailProcessor] Unknown job name: ${job.name}`);
       }
@@ -208,6 +210,35 @@ export class MailProcessor extends WorkerHost {
         <p style="margin-top: 20px; font-size: 12px; color: #666;">
           This user has been created with a PENDING state. Click the button above to verify them.
         </p>
+      </div>
+    `;
+
+    await this.transporter.sendMail({
+      from: `"Kisan ka Pakistan System" <${process.env.USER_EMAIL}>`,
+      to,
+      subject,
+      text,
+      html,
+      headers: {
+        'X-Entity-Ref-ID': Date.now().toString(),
+      },
+    });
+  }
+
+  private async handleSendArtiaProfileUpdateMail(data: { to: string; artiaName: string; shopDetails: any }) {
+    const { to, artiaName, shopDetails } = data;
+    const subject = `Artia Profile Updated: ${artiaName}`;
+    const text = `Artia Profile Updated for ${artiaName}.\n\nShop Name: ${shopDetails.shopName || 'N/A'}\nShop Phone: ${shopDetails.shopPhone || 'N/A'}\nAddress: ${shopDetails.address || 'N/A'}\nCommission Rules: ${shopDetails.commissionRules || 'N/A'}`;
+    const html = `
+      <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; max-width: 600px; margin: auto;">
+        <h2 style="color: #2E7D32;">Artia Profile Updated</h2>
+        <p>The Artia <b>${artiaName}</b> has updated their commission shop profile details:</p>
+        <table cellpadding="8" style="width: 100%; border-collapse: collapse;">
+          <tr><td><b>Shop Name:</b></td><td>${shopDetails.shopName || 'N/A'}</td></tr>
+          <tr><td><b>Shop Phone:</b></td><td>${shopDetails.shopPhone || 'N/A'}</td></tr>
+          <tr><td><b>Address:</b></td><td>${shopDetails.address || 'N/A'}</td></tr>
+          <tr><td><b>Commission Rules:</b></td><td><pre style="background: #f7f7f7; padding: 10px; border-radius: 4px;">${shopDetails.commissionRules || 'N/A'}</pre></td></tr>
+        </table>
       </div>
     `;
 

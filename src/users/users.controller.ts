@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   Req,
   UseGuards,
@@ -11,6 +12,8 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateArtiaProfileDto } from './dto/update-artia-profile.dto';
+import { UpdateFarmerPrivacyDto } from './dto/update-farmer-privacy.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/roles/roles.decorator';
@@ -167,5 +170,83 @@ export class UsersController {
   @Post('connection-requests/:requestId/reject')
   rejectConnection(@Param('requestId', ParseIntPipe) requestId: number, @Req() req: any) {
     return this.usersService.rejectConnectionRequest(requestId, req.user.id);
+  }
+
+  // GET Artia own profile (requires auth & role ARTIA)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Get('artia/profile')
+  getArtiaProfile(@Req() req: any) {
+    return this.usersService.getArtiaProfile(req.user.id);
+  }
+
+  // PATCH Artia own profile (requires auth & role ARTIA)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Patch('artia/profile')
+  updateArtiaProfile(@Body() dto: UpdateArtiaProfileDto, @Req() req: any) {
+    return this.usersService.updateArtiaProfile(req.user.id, dto);
+  }
+
+  // PATCH Farmer own privacy settings (requires auth & role FARMER)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Patch('farmer/privacy')
+  updateFarmerPrivacy(@Body() dto: UpdateFarmerPrivacyDto, @Req() req: any) {
+    return this.usersService.updateFarmerPrivacy(req.user.id, dto);
+  }
+
+  // GET user notifications
+  @UseGuards(JwtAuthGuard)
+  @Get('notifications')
+  getNotifications(@Req() req: any) {
+    return this.usersService.getNotifications(req.user.id);
+  }
+
+  // PATCH mark notification read
+  @UseGuards(JwtAuthGuard)
+  @Patch('notifications/:id/read')
+  markNotificationRead(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.usersService.markNotificationRead(req.user.id, id);
+  }
+
+  // POST respond to privacy consent request
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Post('notifications/:id/respond')
+  respondToConsent(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: { shareInCount: boolean; showOnArtiaProfile: boolean },
+    @Req() req: any
+  ) {
+    return this.usersService.respondToConsent(req.user.id, id, dto);
+  }
+
+  // GET Public list of all verified Artias
+  @Get('artia/public-list')
+  getPublicArtiaList() {
+    return this.usersService.getPublicArtiaList();
+  }
+
+  // GET Public Artia Profile (No auth needed)
+  @Get('artia/:id/public-profile')
+  getPublicArtiaProfile(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.getPublicArtiaProfile(id);
+  }
+
+  // GET Public Farmer Profile (Supported public view or Admin access)
+  @Get('farmer/:id/public-profile')
+  getPublicFarmerProfile(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    let requesterRole: Role | undefined;
+    const token = this.extractToken(req);
+    if (token) {
+      try {
+        const decoded = this.jwtService.verify(token);
+        requesterRole = decoded.role as Role;
+      } catch (e) {
+        // Ignored
+      }
+    }
+    return this.usersService.getPublicFarmerProfile(id, requesterRole);
   }
 }

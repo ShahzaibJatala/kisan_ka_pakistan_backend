@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateArtiaProfileDto } from './dto/update-artia-profile.dto';
+import { UpdateFarmerPrivacyDto } from './dto/update-farmer-privacy.dto';
 import * as bcrypt from 'bcrypt';
 import { Role, UserStatus } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
@@ -824,5 +826,259 @@ export class UsersService {
     });
 
     return { success: true };
+  }
+
+  async getArtiaProfile(artiaId: number) {
+    let profile = await this.prisma.artiaProfile.findUnique({
+      where: { userId: artiaId },
+    });
+    if (!profile) {
+      profile = await this.prisma.artiaProfile.create({
+        data: { userId: artiaId },
+      });
+    }
+    return profile;
+  }
+
+  async updateArtiaProfile(artiaId: number, dto: UpdateArtiaProfileDto) {
+    const updatedProfile = await this.prisma.artiaProfile.update({
+      where: { userId: artiaId },
+      data: dto,
+    });
+
+    // 1. Send profile update email to Super Admin
+    const artiaUser = await this.prisma.user.findUnique({
+      where: { id: artiaId },
+    });
+
+    const superAdmin = await this.prisma.user.findFirst({
+      where: { role: Role.SUPER_ADMIN },
+    });
+
+    if (superAdmin && superAdmin.email && artiaUser) {
+      await this.mailService.sendArtiaProfileUpdateMail(
+        superAdmin.email,
+        artiaUser.name,
+        updatedProfile,
+      ).catch((e) => console.error('Failed to send Artia update email to Super Admin:', e));
+    }
+
+    // 2. Dispatch permission request notifications to connected farmers whenever stats display is on
+    if (updatedProfile.showFarmerCount || updatedProfile.showFarmerDetails) {
+      // Find all farmers attached to this Artia
+      const farmers = await this.prisma.farmerProfile.findMany({
+        where: { artiaId },
+        include: { user: true },
+      });
+
+      for (const farmer of farmers) {
+        // Create consent request notification if not already existing and unread
+        const existing = await this.prisma.notification.findFirst({
+          where: {
+            userId: farmer.user.id,
+            type: 'CONSENT_REQUEST',
+            read: false,
+          },
+        });
+
+        if (!existing) {
+          await this.prisma.notification.create({
+            data: {
+              userId: farmer.user.id,
+              type: 'CONSENT_REQUEST',
+              title_en: 'Privacy Consent Request from your Artia',
+              title_ur: 'آڑھتی کی طرف سے پرائیویسی کی اجازت کی درخواست',
+              body_en: `Your Artia (${updatedProfile.shopName || 'attached Artia'}) wants to display connected farmer stats on their public profile. Do you want to allow this?`,
+              body_ur: `آپ کا آڑھتی (${updatedProfile.shopName || 'منسلک آڑھتی'}) اپنی پبلک پروفائل پر کسانوں کے اعداد و شمار ظاہر کرنا چاہتا ہے۔ کیا آپ اس کی اجازت دینا چاہتے ہیں؟`,
+              metadata: JSON.stringify({
+                artiaId,
+                shopName: updatedProfile.shopName || 'Your Artia',
+              }),
+            },
+          });
+        }
+      }
+    }
+
+    return updatedProfile;
+  }
+
+  async updateFarmerPrivacy(farmerUserId: number, dto: UpdateFarmerPrivacyDto) {
+    const profile = await this.prisma.farmerProfile.findUnique({
+      where: { userId: farmerUserId },
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Farmer profile not found');
+    }
+
+    return this.prisma.farmerProfile.update({
+      where: { userId: farmerUserId },
+      data: {
+        shareInCount: dto.shareInCount !== undefined ? dto.shareInCount : undefined,
+        showOnArtiaProfile: dto.showOnArtiaProfile !== undefined ? dto.showOnArtiaProfile : undefined,
+        showOwnDetailsPublicly: dto.showOwnDetailsPublicly !== undefined ? dto.showOwnDetailsPublicly : undefined,
+      },
+    });
+  }
+
+  async getNotifications(userId: number) {
+    return this.prisma.notification.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async markNotificationRead(userId: number, id: number) {
+    return this.prisma.notification.update({
+      where: { id, userId },
+      data: { read: true },
+    });
+  }
+
+  async respondToConsent(userId: number, notificationId: number, dto: { shareInCount: boolean; showOnArtiaProfile: boolean }) {
+    const notification = await this.prisma.notification.findUnique({
+      where: { id: notificationId },
+    });
+
+    if (!notification || notification.userId !== userId) {
+      throw new NotFoundException('Notification not found');
+    }
+
+    // Update privacy preferences on farmer profile
+    await this.prisma.farmerProfile.update({
+      where: { userId },
+      data: {
+        shareInCount: dto.shareInCount,
+        showOnArtiaProfile: dto.showOnArtiaProfile,
+      },
+    });
+
+    // Delete the consent request notification once responded
+    await this.prisma.notification.delete({
+      where: { id: notificationId },
+    });
+
+    return { success: true };
+  }
+
+  async getPublicArtiaProfile(artiaId: number) {
+    const artia = await this.prisma.user.findFirst({
+      where: { id: artiaId, role: Role.ARTIA },
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        address: true,
+        mandi: { select: { id: true, name: true, city: true } },
+      },
+    });
+
+    if (!artia) {
+      throw new NotFoundException('Artia profile not found');
+    }
+
+    const profile = await this.getArtiaProfile(artiaId);
+
+    // Get count of farmers who consented
+    const farmerCount = await this.prisma.farmerProfile.count({
+      where: { artiaId, shareInCount: true },
+    });
+
+    // Get details of farmers who consented
+    let farmerDetails: any[] = [];
+    if (profile.showFarmerDetails) {
+      const consented = await this.prisma.farmerProfile.findMany({
+        where: { artiaId, showOnArtiaProfile: true },
+        select: {
+          id: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              city: true,
+              address: true,
+              profileImage: true,
+            },
+          },
+        },
+      });
+      farmerDetails = consented.map((c) => c.user);
+    }
+
+    return {
+      artia,
+      profile,
+      farmerCount: profile.showFarmerCount ? farmerCount : null,
+      farmerDetails,
+    };
+  }
+
+  async getPublicFarmerProfile(farmerUserId: number, requesterRole?: Role) {
+    const farmer = await this.prisma.user.findFirst({
+      where: { id: farmerUserId, role: Role.FARMER },
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        address: true,
+        mandi: { select: { id: true, name: true } },
+        farmerProfile: {
+          select: {
+            landSize: true,
+            showOwnDetailsPublicly: true,
+            artia: {
+              select: {
+                id: true,
+                name: true,
+                artiaProfile: { select: { shopName: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!farmer) {
+      throw new NotFoundException('Farmer profile not found');
+    }
+
+    const isPublic = farmer.farmerProfile?.showOwnDetailsPublicly;
+    const isSuperAdmin = requesterRole === Role.SUPER_ADMIN;
+
+    if (!isPublic && !isSuperAdmin) {
+      throw new BadRequestException('This profile is private.');
+    }
+
+    return farmer;
+  }
+
+  async getPublicArtiaList() {
+    return this.prisma.user.findMany({
+      where: {
+        role: Role.ARTIA,
+        status: UserStatus.VERIFIED,
+      },
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        address: true,
+        mandi: {
+          select: {
+            name: true,
+            city: true,
+          },
+        },
+        artiaProfile: {
+          select: {
+            shopName: true,
+            shopPhone: true,
+            address: true,
+            commissionRules: true,
+          },
+        },
+      },
+    });
   }
 }
