@@ -929,11 +929,17 @@ export class UsersService {
       throw new NotFoundException('Farmer profile not found');
     }
 
+    // If the farmer is turning off their public profile, cascade:
+    // force shareInCount and showOnArtiaProfile to false as well,
+    // because a farmer who hides themselves publicly should not appear
+    // in any Artia count or detail listing either.
+    const turningOffPublic = dto.showOwnDetailsPublicly === false;
+
     const updated = await this.prisma.farmerProfile.update({
       where: { userId: farmerUserId },
       data: {
-        shareInCount: dto.shareInCount !== undefined ? dto.shareInCount : undefined,
-        showOnArtiaProfile: dto.showOnArtiaProfile !== undefined ? dto.showOnArtiaProfile : undefined,
+        shareInCount:         turningOffPublic ? false : (dto.shareInCount         !== undefined ? dto.shareInCount         : undefined),
+        showOnArtiaProfile:   turningOffPublic ? false : (dto.showOnArtiaProfile   !== undefined ? dto.showOnArtiaProfile   : undefined),
         showOwnDetailsPublicly: dto.showOwnDetailsPublicly !== undefined ? dto.showOwnDetailsPublicly : undefined,
       },
     });
@@ -1023,16 +1029,16 @@ export class UsersService {
 
     const profile = await this.getArtiaProfile(artiaId);
 
-    // Get count of farmers who consented
+    // Get count of farmers who consented AND have not hidden their own public profile
     const farmerCount = await this.prisma.farmerProfile.count({
-      where: { artiaId, shareInCount: true },
+      where: { artiaId, shareInCount: true, showOwnDetailsPublicly: true },
     });
 
-    // Get details of farmers who consented
+    // Get details of farmers who consented AND have not hidden their own public profile
     let farmerDetails: any[] = [];
     if (profile.showFarmerDetails) {
       const consented = await this.prisma.farmerProfile.findMany({
-        where: { artiaId, showOnArtiaProfile: true },
+        where: { artiaId, showOnArtiaProfile: true, showOwnDetailsPublicly: true },
         select: {
           id: true,
           user: {
