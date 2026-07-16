@@ -83,6 +83,22 @@ export class FarmerController {
     return this.farmerService.getLedger(req.user.id);
   }
 
+  /** POST /farmers/leave-artia — Farmer leaves current artia */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Post('leave-artia')
+  async leaveArtia(@Req() req: RequestWithUser) {
+    return this.farmerService.leaveArtia(req.user.id);
+  }
+
+  /** GET /farmers/previous-artias — Farmer gets previous artias + ledger summaries */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Get('previous-artias')
+  async getPreviousArtias(@Req() req: RequestWithUser) {
+    return this.farmerService.getPreviousArtias(req.user.id);
+  }
+
   // ─── ARTIA ROUTES (static paths MUST come before parameterized paths) ─────
 
   /** GET /farmers/personal-ledger — Fetch Artia's personal ledger */
@@ -121,6 +137,25 @@ export class FarmerController {
   @Get('artia/dashboard')
   async getArtiaFarmersDashboard(@Req() req: RequestWithUser) {
     return this.farmerService.getArtiaFarmersDashboard(req.user.id);
+  }
+
+  /** POST /farmers/:farmerId/remove — Artia removes farmer */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Post(':farmerId/remove')
+  async removeFarmer(
+    @Req() req: RequestWithUser,
+    @Param('farmerId', ParseIntPipe) farmerId: number,
+  ) {
+    return this.farmerService.removeFarmer(req.user.id, farmerId);
+  }
+
+  /** GET /farmers/artia/left-farmers — Artia gets left farmers + ledger summaries */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ARTIA)
+  @Get('artia/left-farmers')
+  async getLeftFarmers(@Req() req: RequestWithUser) {
+    return this.farmerService.getLeftFarmers(req.user.id);
   }
 
   /** POST /farmers/ledgers/:ledgerId/transactions — Artia adds a transaction */

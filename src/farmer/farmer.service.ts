@@ -17,6 +17,7 @@ import { MailService } from '../mail/mail.service';
 import { CreateLedgerDto } from './dto/create-ledger.dto';
 import { UpdateLedgerDto } from './dto/update-ledger.dto';
 import { AddTransactionDto } from './dto/add-transaction.dto';
+import { LedgerGateway } from './ledger.gateway';
 
 @Injectable()
 export class FarmerService {
@@ -27,6 +28,7 @@ export class FarmerService {
     private readonly priceAggregationQueue: Queue,
     private jwtService: JwtService,
     private mailService: MailService,
+    private ledgerGateway: LedgerGateway,
   ) {}
 
   /**
@@ -310,6 +312,9 @@ export class FarmerService {
       },
     });
 
+    // Emit WebSocket notification to farmer
+    this.ledgerGateway.emitToFarmer(farmerUserId, 'ledger:created', ledger);
+
     return ledger;
   }
 
@@ -320,6 +325,7 @@ export class FarmerService {
     // Verify the ledger was created by this artia
     const ledger = await this.prisma.farmerLedger.findFirst({
       where: { id: ledgerId, createdByArtiaId: artiaId },
+      include: { farmer: true },
     });
 
     if (!ledger) {
@@ -343,6 +349,9 @@ export class FarmerService {
         net: dto.net !== undefined ? dto.net : null,
       },
     });
+
+    // Emit WebSocket notification to farmer
+    this.ledgerGateway.emitToFarmer(ledger.farmer.userId, 'transaction:added', transaction);
 
     return transaction;
   }
@@ -421,6 +430,7 @@ export class FarmerService {
     // Verify the ledger belongs to this artia
     const ledger = await this.prisma.farmerLedger.findFirst({
       where: { id: ledgerId, createdByArtiaId: artiaId },
+      include: { farmer: true },
     });
 
     if (!ledger) {
@@ -445,6 +455,9 @@ export class FarmerService {
     const balance = updated.transactions.reduce((sum, tx) => {
       return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
     }, 0);
+
+    // Emit WebSocket notification to farmer
+    this.ledgerGateway.emitToFarmer(ledger.farmer.userId, 'ledger:updated', { ...updated, balance });
 
     return { ...updated, balance };
   }
@@ -544,5 +557,252 @@ export class FarmerService {
       updatedAt: ledger.updatedAt,
       balance,
     };
+  }
+
+  /**
+   * 14. Farmer leaves current artia (POST /farmers/leave-artia)
+   */
+  async leaveArtia(farmerUserId: number) {
+    const profile = await this.prisma.farmerProfile.findUnique({
+      where: { userId: farmerUserId },
+      include: { user: true },
+    });
+
+    if (!profile || !profile.artiaId) {
+      throw new NotFoundException('Farmer profile not found or not connected to an artia');
+    }
+
+    const artiaId = profile.artiaId;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Create ArtiaFarmerHistory record
+      await tx.artiaFarmerHistory.create({
+        data: {
+          farmerId: farmerUserId,
+          artiaId: artiaId,
+          leftBy: 'FARMER',
+        },
+      });
+
+      // Update farmer profile to disconnect from artia
+      await tx.farmerProfile.update({
+        where: { id: profile.id },
+        data: {
+          artiaId: null,
+          showOnArtiaProfile: false,
+          shareInCount: false,
+        },
+      });
+
+      // Delete pending CONSENT_REQUEST notification
+      await tx.notification.deleteMany({
+        where: {
+          userId: farmerUserId,
+          type: 'CONSENT_REQUEST',
+        },
+      });
+
+      // Delete any pending ConnectionRequest between them
+      await tx.connectionRequest.deleteMany({
+        where: {
+          artiaId: artiaId,
+          farmerId: farmerUserId,
+          status: 'PENDING',
+        },
+      });
+    });
+
+    // Invalidate Redis cache for artia profile
+    await this.invalidateArtiaProfileCache(artiaId);
+
+    return { message: 'Successfully left artia' };
+  }
+
+  /**
+   * 15. Artia removes a farmer (POST /farmers/:farmerId/remove)
+   */
+  async removeFarmer(artiaUserId: number, farmerUserId: number) {
+    const profile = await this.prisma.farmerProfile.findFirst({
+      where: { userId: farmerUserId, artiaId: artiaUserId },
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Farmer not found or does not belong to your account');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Create ArtiaFarmerHistory record
+      await tx.artiaFarmerHistory.create({
+        data: {
+          farmerId: farmerUserId,
+          artiaId: artiaUserId,
+          leftBy: 'ARTIA',
+        },
+      });
+
+      // Update farmer profile to disconnect from artia
+      await tx.farmerProfile.update({
+        where: { id: profile.id },
+        data: {
+          artiaId: null,
+          showOnArtiaProfile: false,
+          shareInCount: false,
+        },
+      });
+
+      // Delete pending CONSENT_REQUEST notification
+      await tx.notification.deleteMany({
+        where: {
+          userId: farmerUserId,
+          type: 'CONSENT_REQUEST',
+        },
+      });
+
+      // Delete any pending ConnectionRequest between them
+      await tx.connectionRequest.deleteMany({
+        where: {
+          artiaId: artiaUserId,
+          farmerId: farmerUserId,
+          status: 'PENDING',
+        },
+      });
+    });
+
+    // Invalidate Redis cache for artia profile
+    await this.invalidateArtiaProfileCache(artiaUserId);
+
+    return { message: 'Successfully removed farmer' };
+  }
+
+  /**
+   * 16. Artia gets history + ledgers of left farmers (GET /farmers/artia/left-farmers)
+   */
+  async getLeftFarmers(artiaUserId: number) {
+    const leftHistories = await this.prisma.artiaFarmerHistory.findMany({
+      where: { artiaId: artiaUserId },
+      include: {
+        farmer: {
+          include: {
+            farmerProfile: true,
+          },
+        },
+      },
+      orderBy: { leftAt: 'desc' },
+    });
+
+    const result = await Promise.all(
+      leftHistories.map(async (history: any) => {
+        const farmerProfile = history.farmer.farmerProfile;
+        if (!farmerProfile) return null;
+
+        // Get ledgers between this artia and farmer
+        const ledgers = await this.prisma.farmerLedger.findMany({
+          where: {
+            farmerId: farmerProfile.id,
+            createdByArtiaId: artiaUserId,
+          },
+          include: {
+            transactions: { orderBy: { createdAt: 'desc' } },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        const ledgersWithBalance = ledgers.map(ledger => {
+          const balance = ledger.transactions.reduce((sum, tx) => {
+            return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+          }, 0);
+          return { ...ledger, balance };
+        });
+
+        return {
+          farmer: {
+            id: history.farmer.id,
+            name: history.farmer.name,
+            phone: history.farmer.phone,
+            email: history.farmer.email,
+            profileImage: history.farmer.profileImage,
+            city: history.farmer.city,
+            status: history.farmer.status,
+          },
+          leftBy: history.leftBy,
+          leftAt: history.leftAt,
+          ledgers: ledgersWithBalance,
+        };
+      }),
+    );
+
+    return result.filter((item: any) => item !== null);
+  }
+
+  /**
+   * 17. Farmer gets history + ledgers from past artias (GET /farmers/previous-artias)
+   */
+  async getPreviousArtias(farmerUserId: number) {
+    const leftHistories = await this.prisma.artiaFarmerHistory.findMany({
+      where: { farmerId: farmerUserId },
+      include: {
+        artia: {
+          include: {
+            artiaProfile: true,
+          },
+        },
+      },
+      orderBy: { leftAt: 'desc' },
+    });
+
+    const result = await Promise.all(
+      leftHistories.map(async (history: any) => {
+        const artiaProfile = history.artia.artiaProfile;
+        if (!artiaProfile) return null;
+
+        const farmerProfile = await this.prisma.farmerProfile.findUnique({
+          where: { userId: farmerUserId },
+        });
+
+        if (!farmerProfile) return null;
+
+        // Get ledgers between this farmer and artia
+        const ledgers = await this.prisma.farmerLedger.findMany({
+          where: {
+            farmerId: farmerProfile.id,
+            createdByArtiaId: history.artiaId,
+          },
+          include: {
+            transactions: { orderBy: { createdAt: 'desc' } },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        const ledgersWithBalance = ledgers.map(ledger => {
+          const balance = ledger.transactions.reduce((sum, tx) => {
+            return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
+          }, 0);
+          return { ...ledger, balance };
+        });
+
+        return {
+          artia: {
+            id: history.artia.id,
+            name: history.artia.name,
+            phone: history.artia.phone,
+            email: history.artia.email,
+            shopName: artiaProfile.shopName,
+            shopPhone: artiaProfile.shopPhone,
+            address: artiaProfile.address,
+          },
+          leftBy: history.leftBy,
+          leftAt: history.leftAt,
+          ledgers: ledgersWithBalance,
+        };
+      }),
+    );
+
+    return result.filter((item: any) => item !== null);
+  }
+
+  private async invalidateArtiaProfileCache(artiaId: number) {
+    // This would typically use Redis, but for now we'll leave it as a placeholder
+    // In production, you would do something like:
+    // await this.redisService.del(`artia:profile:${artiaId}`);
   }
 }

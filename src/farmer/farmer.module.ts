@@ -5,6 +5,7 @@ import { FarmerController } from './farmer.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { MailModule } from '../mail/mail.module';
 import { JwtModule } from '@nestjs/jwt';
+import { LedgerGateway } from './ledger.gateway';
 
 @Module({
   imports: [
@@ -19,7 +20,7 @@ import { JwtModule } from '@nestjs/jwt';
       { name: 'price-aggregation' },
     ),
   ],
-  providers: [FarmerService],
+  providers: [FarmerService, LedgerGateway],
   controllers: [FarmerController],
   exports: [FarmerService],
 })

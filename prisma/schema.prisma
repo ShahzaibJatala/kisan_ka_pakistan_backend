@@ -75,6 +75,10 @@ model User {
 
   notifications Notification[]
 
+  // Artia-Farmer Leave History Relations
+  farmerLeftHistories  ArtiaFarmerHistory[] @relation("FarmerLeftHistory")
+  artiaLeftHistories   ArtiaFarmerHistory[] @relation("ArtiaLeftHistory")
+
   // Existing standard relations
   posts         Post[]
   prices        Price[]
@@ -274,5 +278,17 @@ model Notification {
   metadata  String?  // JSON with extra info e.g. { "artiaId": 3 }
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+model ArtiaFarmerHistory {
+  id        Int      @id @default(autoincrement())
+  farmerId  Int      // farmer User.id
+  artiaId   Int      // artia User.id
+  leftBy    String   // 'FARMER' | 'ARTIA'
+  leftAt    DateTime @default(now())
+  farmer    User     @relation("FarmerLeftHistory", fields: [farmerId], references: [id])
+  artia     User     @relation("ArtiaLeftHistory",  fields: [artiaId],  references: [id])
+  @@index([farmerId])
+  @@index([artiaId])
 }
 

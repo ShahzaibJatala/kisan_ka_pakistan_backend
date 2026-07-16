@@ -1017,6 +1017,7 @@ export class UsersService {
       select: {
         id: true,
         name: true,
+        phone: true,
         city: true,
         address: true,
         mandi: { select: { id: true, name: true, city: true } },
