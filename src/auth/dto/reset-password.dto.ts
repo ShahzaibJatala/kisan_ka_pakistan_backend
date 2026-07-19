@@ -12,7 +12,7 @@ export class VerifyOtpDto {
   email: string;
 
   @IsString()
-  @Length(4, 4) // Assuming 4 digit OTP based on your math logic
+  @Length(6, 6)
   otp: string;
 }
 
@@ -23,6 +23,6 @@ export class ResetPasswordDto {
 
   @IsString()
   @IsNotEmpty()
-  @Length(6, 50) // Minimum password length
+  @Length(8, 50) // Minimum password length restricted to 8 characters
   password: string;
 }

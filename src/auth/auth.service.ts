@@ -50,7 +50,7 @@ export class AuthService {
       const { password, ...result } = user;
       return result;
     }
-    throw new UnauthorizedException('Invalid credentials');
+    throw new UnauthorizedException('The email or password you entered is incorrect.');
   }
 
   async login(user: any) {
@@ -64,6 +64,7 @@ export class AuthService {
         role: user.role,
         phone: user.phone,
         email: user.email,
+        status: user.status,
       },
     };
   }
@@ -77,7 +78,7 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
     await this.usersService.update(user.id, {
@@ -153,11 +154,20 @@ export class AuthService {
       status: user.status,
     };
 
-    // Refresh token contains ONLY the userId for security
-    const refreshPayload = { sub: user.id };
+    // Refresh token contains userId, role, status, and hasPhone boolean for middleware route authorization
+    const refreshPayload = {
+      sub: user.id,
+      role: user.role,
+      status: user.status,
+      hasPhone: !!user.phone && user.phone.trim() !== '',
+    };
 
-    const accessToken = this.jwtService.sign(accessPayload, { expiresIn: '15m' });
-    const refreshToken = this.jwtService.sign(refreshPayload, { expiresIn: '7d' });
+    const accessToken = this.jwtService.sign(accessPayload, {
+      expiresIn: '15m',
+    });
+    const refreshToken = this.jwtService.sign(refreshPayload, {
+      expiresIn: '7d',
+    });
 
     // Hash the refresh token before saving to DB (never store plain tokens)
     const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
@@ -177,8 +187,11 @@ export class AuthService {
       email: user.email,
       phone: user.phone,
       role: user.role,
+      status: user.status,
     };
-    const newAccessToken = this.jwtService.sign(accessPayload, { expiresIn: '15m' });
+    const newAccessToken = this.jwtService.sign(accessPayload, {
+      expiresIn: '15m',
+    });
 
     return { access_token: newAccessToken };
   }
@@ -192,6 +205,20 @@ export class AuthService {
       data: { refreshToken: null },
     });
     return { message: 'Logged out successfully' };
+  }
+
+  async logoutAll(userId: number) {
+    const salt = await bcrypt.genSalt(10);
+    const invalidToken =
+      Math.random().toString(36).substring(2, 15) +
+      Math.random().toString(36).substring(2, 15);
+    const hashedToken = await bcrypt.hash(invalidToken, salt);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { refreshToken: hashedToken },
+    });
+    return { message: 'Logged out from all devices successfully' };
   }
 
   async verifyDashboardLoginToken(token: string) {
@@ -242,7 +269,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid Super Admin credentials');
     }
 
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
     this.superAdminOtp = {
       otp,
       expires: now + 5 * 60 * 1000,
@@ -296,7 +323,7 @@ export class AuthService {
     };
   }
 
-  async googleLogin(idToken: string) {
+  async googleLogin(idToken: string, phone?: string) {
     if (!idToken) {
       throw new BadRequestException('ID token is required.');
     }
@@ -307,10 +334,16 @@ export class AuthService {
         `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`,
       );
       if (!response.ok) {
-        throw new BadRequestException('Invalid Google ID token.');
+        const errData = await response.json().catch(() => ({}));
+        throw new BadRequestException(
+          errData.error_description || 'Invalid Google ID token.',
+        );
       }
       payload = await response.json();
     } catch (e) {
+      if (e instanceof BadRequestException) {
+        throw e;
+      }
       throw new BadRequestException('Failed to verify Google ID token.');
     }
 
@@ -323,10 +356,10 @@ export class AuthService {
     let user = await this.usersService.findByEmail(email);
 
     if (!user) {
-      // Register new user as FARMER by default, status PENDING
+      // Register new user as FARMER by default, status PENDING (without phone number)
       const randomPassword = Math.random().toString(36).slice(-8);
       const hashedPassword = await bcrypt.hash(randomPassword, 10);
-      
+
       user = await this.prisma.user.create({
         data: {
           email,
@@ -349,22 +382,34 @@ export class AuthService {
 
       // Send email alert to Super Admin ONLY on first registration
       try {
-        const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'kisankapakistan.info@gmail.com';
+        const superAdminEmail =
+          process.env.SUPER_ADMIN_EMAIL || 'kisankapakistan.info@gmail.com';
         let superAdmin = await this.prisma.user.findFirst({
           where: { role: Role.SUPER_ADMIN },
         });
         if (!superAdmin) {
-          superAdmin = await this.usersService.findOrCreateSuperAdmin(superAdminEmail, 'Super Admin');
+          superAdmin = await this.usersService.findOrCreateSuperAdmin(
+            superAdminEmail,
+            'Super Admin',
+          );
         }
 
         const token = this.jwtService.sign(
-          { type: 'confirm-verification', userId: user.id, verifierId: superAdmin.id },
+          {
+            type: 'confirm-verification',
+            userId: user.id,
+            verifierId: superAdmin.id,
+          },
           { expiresIn: '7d' },
         );
-        const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001';
-        const verifyUrl = `${backendUrl}/users/confirm-verification?token=${token}`;
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const verifyUrl = `${frontendUrl}/verify-user?token=${token}`;
 
-        await this.mailService.sendGoogleSignupAlert(superAdminEmail, user, verifyUrl);
+        await this.mailService.sendGoogleSignupAlert(
+          superAdminEmail,
+          user,
+          verifyUrl,
+        );
       } catch (err) {
         console.error('Failed to send Super Admin alert:', err);
       }
@@ -381,6 +426,7 @@ export class AuthService {
         role: user.role,
         phone: user.phone,
         email: user.email,
+        status: user.status,
       },
     };
   }

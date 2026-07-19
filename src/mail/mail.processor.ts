@@ -9,13 +9,26 @@ export class MailProcessor extends WorkerHost {
 
   constructor() {
     super();
-    this.transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.USER_EMAIL,
-        pass: process.env.USER_PASSWORD,
-      },
-    });
+  }
+
+  private getTransporter(): nodemailer.Transporter {
+    if (!this.transporter) {
+      const user = process.env.USER_EMAIL;
+      const pass = process.env.USER_PASSWORD;
+      if (!user || !pass) {
+        console.warn('[MailProcessor] Warning: USER_EMAIL or USER_PASSWORD environment variables are not set.');
+      }
+      this.transporter = nodemailer.createTransport({
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true, // true for 465, false for other ports
+        auth: {
+          user: user,
+          pass: pass,
+        },
+      });
+    }
+    return this.transporter;
   }
 
   async process(job: Job<any>): Promise<any> {
@@ -45,27 +58,15 @@ export class MailProcessor extends WorkerHost {
 
   private async handleSendOtpMail(data: { to: string; otp: string }) {
     const { to, otp } = data;
-    const subject = 'Kisan ka Pakistan - Password Reset OTP';
-    const text = `Password Reset Request. Your OTP code is: ${otp}. It expires in 5 minutes.`;
-    const html = `
-      <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; max-width: 600px; margin: auto;">
-        <h2 style="color: #2E7D32;">Password Reset Request</h2>
-        <p>Your verification code for resetting your password is:</p>
-        <h1 style="color: #2E7D32; letter-spacing: 5px; text-align: center; background: #fafafa; padding: 15px; border-radius: 4px;">${otp}</h1>
-        <p>This code <b>expires in 5 minutes</b>.</p>
-        <p style="color: #666; font-size: 12px; margin-top: 20px;">If you didn't request this, please ignore this email.</p>
-      </div>
-    `;
+    const subject = `Your Kisan ka Pakistan Verification Code: ${otp}`;
+    const text = `Hello,\n\nYour Kisan ka Pakistan verification code for resetting your password is:\n\n${otp}\n\nThis code is valid for 5 minutes. If you did not request this code, you can safely ignore this email.\n\nThanks,\nKisan ka Pakistan Support Team`;
 
-    await this.transporter.sendMail({
+    await this.getTransporter().sendMail({
       from: `"Kisan ka Pakistan Support" <${process.env.USER_EMAIL}>`,
       to,
+      replyTo: process.env.USER_EMAIL,
       subject,
       text,
-      html,
-      headers: {
-        'X-Entity-Ref-ID': Date.now().toString(),
-      },
     });
   }
 
@@ -118,7 +119,7 @@ export class MailProcessor extends WorkerHost {
     `;
 
     console.log('--- LOCAL TESTING (Verify URL) ---\n', verifyUrl, '\n---------------------------------');
-    await this.transporter.sendMail({
+    await this.getTransporter().sendMail({
       from: `"Kisan ka Pakistan Support" <${process.env.USER_EMAIL}>`,
       to,
       subject,
@@ -150,7 +151,7 @@ export class MailProcessor extends WorkerHost {
     `;
 
     console.log('--- LOCAL TESTING (Dashboard URL) ---\n', dashboardUrl, '\n------------------------------------');
-    await this.transporter.sendMail({
+    await this.getTransporter().sendMail({
       from: `"Kisan ka Pakistan Support" <${process.env.USER_EMAIL}>`,
       to,
       subject,
@@ -179,7 +180,7 @@ export class MailProcessor extends WorkerHost {
       </div>
     `;
 
-    await this.transporter.sendMail({
+    await this.getTransporter().sendMail({
       from: `"Kisan ka Pakistan Security" <${process.env.USER_EMAIL}>`,
       to,
       subject,
@@ -213,7 +214,7 @@ export class MailProcessor extends WorkerHost {
       </div>
     `;
 
-    await this.transporter.sendMail({
+    await this.getTransporter().sendMail({
       from: `"Kisan ka Pakistan System" <${process.env.USER_EMAIL}>`,
       to,
       subject,
@@ -242,7 +243,7 @@ export class MailProcessor extends WorkerHost {
       </div>
     `;
 
-    await this.transporter.sendMail({
+    await this.getTransporter().sendMail({
       from: `"Kisan ka Pakistan System" <${process.env.USER_EMAIL}>`,
       to,
       subject,

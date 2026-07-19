@@ -13,6 +13,7 @@ import { MailModule } from './mail/mail.module';
 import { FarmerModule } from './farmer/farmer.module';
 import { MandiModule } from './mandi/mandi.module';
 import { RedisModule } from './redis/redis.module';
+import { BypassModule } from './bypass/bypass.module';
 import { RateLimiterGuard } from './auth/guards/rate-limiter.guard';
 
 @Module({
@@ -36,6 +37,7 @@ import { RateLimiterGuard } from './auth/guards/rate-limiter.guard';
     FarmerModule,
     MandiModule,
     RedisModule,
+    BypassModule,
   ],
   controllers: [AppController],
   providers: [

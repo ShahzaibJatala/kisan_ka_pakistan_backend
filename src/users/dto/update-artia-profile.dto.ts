@@ -11,6 +11,10 @@ export class UpdateArtiaProfileDto {
 
   @IsOptional()
   @IsString()
+  secondPhone?: string;
+
+  @IsOptional()
+  @IsString()
   address?: string;
 
   @IsOptional()

@@ -6,11 +6,13 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { MailModule } from '../mail/mail.module';
 import { JwtModule } from '@nestjs/jwt';
 import { LedgerGateway } from './ledger.gateway';
+import { BypassModule } from '../bypass/bypass.module';
 
 @Module({
   imports: [
     PrismaModule,
     MailModule,
+    BypassModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'secretKey',
       signOptions: { expiresIn: '7d' },

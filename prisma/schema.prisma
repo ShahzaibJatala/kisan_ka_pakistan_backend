@@ -79,6 +79,12 @@ model User {
   farmerLeftHistories  ArtiaFarmerHistory[] @relation("FarmerLeftHistory")
   artiaLeftHistories   ArtiaFarmerHistory[] @relation("ArtiaLeftHistory")
 
+  // Join-table connections (farmers linked to this Artia)
+  farmerConnections    FarmerArtiaConnection[] @relation("ArtiaToFarmersConnection")
+  bypassRequestsAsTarget   JoinBypassRequest[] @relation("BypassTargetArtia")
+  bypassRequestsAsApprover JoinBypassRequest[] @relation("BypassApprover")
+  createdLedgers       FarmerLedger[]          @relation("CreatedLedgers")
+
   // Existing standard relations
   posts         Post[]
   prices        Price[]
@@ -148,6 +154,9 @@ model FarmerProfile {
   showOwnDetailsPublicly  Boolean   @default(false)
   consentUpdatedAt        DateTime?
 
+  // Join-table connections:
+  connections        FarmerArtiaConnection[]
+
   // --- Future Relations ---
   // primaryCrops    Crop[]?    // Add this implicit many-to-many relation once you build the Crop model
   ledgers            FarmerLedger[]
@@ -165,6 +174,7 @@ model FarmerLedger {
   farmerId         Int
   farmer           FarmerProfile @relation(fields: [farmerId], references: [id], onDelete: Cascade)
   createdByArtiaId Int?          // Artia who created this ledger
+  createdByArtia   User?         @relation("CreatedLedgers", fields: [createdByArtiaId], references: [id])
   transactions     Transaction[]
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
@@ -258,6 +268,7 @@ model ArtiaProfile {
   user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   shopName           String?
   shopPhone          String?
+  secondPhone        String?  // Optional second phone number for Artia
   address            String?
   commissionRules    String?  // JSON stringified commission rules
   showFarmerCount    Boolean  @default(false)
@@ -290,5 +301,34 @@ model ArtiaFarmerHistory {
   artia     User     @relation("ArtiaLeftHistory",  fields: [artiaId],  references: [id])
   @@index([farmerId])
   @@index([artiaId])
+}
+
+model FarmerArtiaConnection {
+  id        Int           @id @default(autoincrement())
+  farmerId  Int
+  farmer    FarmerProfile @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  artiaId   Int
+  artia     User          @relation("ArtiaToFarmersConnection", fields: [artiaId], references: [id], onDelete: Cascade)
+  phone     String?       // Connection-specific phone number added by Artia
+  createdAt DateTime      @default(now())
+
+  @@unique([farmerId, artiaId])
+  @@index([phone])
+}
+
+model JoinBypassRequest {
+  id             Int      @id @default(autoincrement())
+  farmerName     String
+  farmerPhone    String
+  farmerCnic     String
+  targetArtiaId  Int
+  targetArtia    User     @relation("BypassTargetArtia", fields: [targetArtiaId], references: [id])
+  reason         String?
+  targetRole     String   // "SADAR" or "SUPER_ADMIN"
+  status         String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  approvedById   Int?
+  approvedBy     User?    @relation("BypassApprover", fields: [approvedById], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 

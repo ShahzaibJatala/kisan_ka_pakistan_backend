@@ -14,6 +14,7 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateArtiaProfileDto } from './dto/update-artia-profile.dto';
 import { UpdateFarmerPrivacyDto } from './dto/update-farmer-privacy.dto';
+import { UpdateFarmerProfileDto } from './dto/update-farmer-profile.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/roles/roles.decorator';
@@ -74,10 +75,11 @@ export class UsersController {
     return this.usersService.requestVerification(req.user.id, verifierId);
   }
 
-  // Public verification endpoint hit from email verify button
+  // Verification endpoint called by the frontend website verify-user page
+  @UseGuards(JwtAuthGuard)
   @Get('confirm-verification')
-  confirmVerification(@Query('token') token: string) {
-    return this.usersService.confirmVerification(token);
+  confirmVerification(@Query('token') token: string, @Req() req: any) {
+    return this.usersService.confirmVerification(token, req.user.id);
   }
 
   // Separately send the verification success email to verified user
@@ -194,6 +196,22 @@ export class UsersController {
   @Patch('farmer/privacy')
   updateFarmerPrivacy(@Body() dto: UpdateFarmerPrivacyDto, @Req() req: any) {
     return this.usersService.updateFarmerPrivacy(req.user.id, dto);
+  }
+
+  // GET Farmer own profile details (requires auth & role FARMER)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Get('farmer/profile')
+  getFarmerProfile(@Req() req: any) {
+    return this.usersService.getFarmerProfile(req.user.id);
+  }
+
+  // PATCH Farmer own profile details (requires auth & role FARMER)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Patch('farmer/profile')
+  updateFarmerProfile(@Body() dto: UpdateFarmerProfileDto, @Req() req: any) {
+    return this.usersService.updateFarmerProfile(req.user.id, dto);
   }
 
   // GET user notifications

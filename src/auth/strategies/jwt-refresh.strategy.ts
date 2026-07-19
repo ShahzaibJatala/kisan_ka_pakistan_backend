@@ -50,17 +50,17 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
 
     if (!user || !user.refreshToken) {
-      throw new UnauthorizedException('Session not found. Please login to your account.');
+      throw new UnauthorizedException('Your session has expired. Please sign in again.');
     }
 
     const token = refreshTokenExtractor(req);
     if (!token) {
-      throw new UnauthorizedException('Refresh token is required.');
+      throw new UnauthorizedException('Your session has expired. Please sign in again.');
     }
 
     const tokenMatches = await bcrypt.compare(token, user.refreshToken);
     if (!tokenMatches) {
-      throw new UnauthorizedException('Refresh token is invalid. Please login to your account.');
+      throw new UnauthorizedException('Your session has expired. Please sign in again.');
     }
 
     return user;

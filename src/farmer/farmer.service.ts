@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterFarmerDto } from './dto/register-farmer.dto';
@@ -18,6 +19,7 @@ import { CreateLedgerDto } from './dto/create-ledger.dto';
 import { UpdateLedgerDto } from './dto/update-ledger.dto';
 import { AddTransactionDto } from './dto/add-transaction.dto';
 import { LedgerGateway } from './ledger.gateway';
+import { BypassService } from '../bypass/bypass.service';
 
 @Injectable()
 export class FarmerService {
@@ -29,6 +31,7 @@ export class FarmerService {
     private jwtService: JwtService,
     private mailService: MailService,
     private ledgerGateway: LedgerGateway,
+    private bypassService: BypassService,
   ) {}
 
   /**
@@ -40,6 +43,11 @@ export class FarmerService {
     // 1. Sanitize the CNIC immediately by removing all dashes
     if (cnic) {
       cnic = cnic.replace(/-/g, ''); 
+    }
+
+    // Validate phone number uniqueness across all other farmers
+    if (phone) {
+      await this.bypassService.validatePhoneUniqueness(phone, cnic || '');
     }
 
     // Check if phone or sanitized cnic is already registered
@@ -57,13 +65,6 @@ export class FarmerService {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 2. Check if CNIC is exactly an 11-digit number
-    // (Change \d{11} to \d{13} if you need standard PK CNIC length)
-    // let initialStatus: UserStatus = UserStatus.PENDING;
-    // if (cnic && /^\d{13}$/.test(cnic)) {
-    //   initialStatus = UserStatus.VERIFIED;
-    // }
-
     // Perform database operations in a transaction
     const result = await this.prisma.$transaction(async (tx) => {
       // Create User
@@ -74,13 +75,12 @@ export class FarmerService {
           password: hashedPassword,
           name,
           role: Role.FARMER,
-          status: UserStatus.PENDING, // 3. Fixed: Actually passing the calculated status here
+          status: UserStatus.PENDING,
           isOtpVerified: false,
         },
       });
 
       // Create linked FarmerProfile
-      // Link artiaId if provided, otherwise link mandiId if provided
       const profile = await tx.farmerProfile.create({
         data: {
           userId: user.id,
@@ -88,6 +88,44 @@ export class FarmerService {
           mandiId: artiaId ? null : mandiId || null,
         },
       });
+
+      if (artiaId) {
+        // Validate limits
+        const limitResult = await this.bypassService.checkFarmerJoinLimits(
+          profile.id,
+          artiaId,
+          cnic || '',
+        );
+
+        if (!limitResult.allowed) {
+          throw new BadRequestException({
+            error: 'LIMIT_HIT',
+            reason: limitResult.reason,
+          });
+        }
+
+        // Create connection
+        await tx.farmerArtiaConnection.create({
+          data: {
+            farmerId: profile.id,
+            artiaId,
+            phone,
+          },
+        });
+
+        // Set profile mandiId if not set
+        const artia = await tx.user.findUnique({ where: { id: artiaId } });
+        if (artia?.mandiId) {
+          await tx.farmerProfile.update({
+            where: { id: profile.id },
+            data: { mandiId: artia.mandiId },
+          });
+          await tx.user.update({
+            where: { id: user.id },
+            data: { mandiId: artia.mandiId },
+          });
+        }
+      }
 
       return { user, profile };
     });
@@ -115,8 +153,8 @@ export class FarmerService {
     };
     const token = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-    // Verify URL
-    const verifyUrl = `${process.env.BACKEND_URL}/users/confirm-verification?token=${token}`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const verifyUrl = `${frontendUrl}/verify-user?token=${token}`;
 
     if (superAdminEmail) {
       await this.mailService.sendVerificationRequestMail(superAdminEmail, result.user, verifyUrl);
@@ -135,7 +173,23 @@ export class FarmerService {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
-        farmerProfile: true,
+        farmerProfile: {
+          include: {
+            connections: {
+              include: {
+                artia: {
+                  select: {
+                    id: true,
+                    name: true,
+                    mandi: {
+                      select: { name: true, city: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -258,7 +312,7 @@ export class FarmerService {
   /**
    * 5. Farmer views their own ledgers (GET /farmers/me/ledgers)
    */
-  async getLedger(userId: number) {
+  async getLedger(userId: number, artiaId?: number) {
     const profile = await this.prisma.farmerProfile.findUnique({
       where: { userId },
     });
@@ -267,11 +321,29 @@ export class FarmerService {
       throw new NotFoundException('Farmer profile not found');
     }
 
+    if (artiaId) {
+      const connection = await this.prisma.farmerArtiaConnection.findUnique({
+        where: { farmerId_artiaId: { farmerId: profile.id, artiaId } },
+      });
+      if (!connection) throw new NotFoundException('Artia connection not found');
+    }
+
     const ledgers = await this.prisma.farmerLedger.findMany({
-      where: { farmerId: profile.id },
+      where: { farmerId: profile.id, ...(artiaId ? { createdByArtiaId: artiaId } : {}) },
       include: {
         transactions: {
           orderBy: { createdAt: 'desc' },
+        },
+        createdByArtia: {
+          select: {
+            id: true,
+            name: true,
+            artiaProfile: {
+              select: {
+                shopName: true,
+              },
+            },
+          },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -284,6 +356,26 @@ export class FarmerService {
       }, 0);
       return { ...ledger, balance };
     });
+  }
+
+  async getConnections(userId: number) {
+    const profile = await this.prisma.farmerProfile.findUnique({ where: { userId } });
+    if (!profile) throw new NotFoundException('Farmer profile not found');
+    const connections = await this.prisma.farmerArtiaConnection.findMany({
+      where: { farmerId: profile.id },
+      include: {
+        artia: {
+          select: {
+            id: true, name: true, phone: true, mandiId: true,
+            mandi: { select: { id: true, name: true, city: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    return connections.map(({ id, phone, createdAt, artia }) => ({
+      id, phone, createdAt, artia,
+    }));
   }
 
   /**
@@ -309,6 +401,19 @@ export class FarmerService {
         description: dto.description || null,
         farmerId: profile.id,
         createdByArtiaId: artiaId,
+      },
+    });
+
+    // Create DB Notification for farmer
+    await this.prisma.notification.create({
+      data: {
+        userId: farmerUserId,
+        type: 'LEDGER_CREATED',
+        title_en: 'New Ledger Created',
+        title_ur: 'نیا کھاتہ بنایا گیا',
+        body_en: `A new ledger "${ledger.name}" has been created for you.`,
+        body_ur: `آپ کے لیے ایک نیا کھاتہ "${ledger.name}" بنایا گیا ہے۔`,
+        metadata: JSON.stringify({ ledgerId: ledger.id }),
       },
     });
 
@@ -350,6 +455,19 @@ export class FarmerService {
       },
     });
 
+    // Create DB Notification for farmer
+    await this.prisma.notification.create({
+      data: {
+        userId: ledger.farmer.userId,
+        type: 'TRANSACTION_ADDED',
+        title_en: 'New Transaction Added',
+        title_ur: 'نئی ٹرانزیکشن شامل کی گئی',
+        body_en: `A transaction of PKR ${dto.amount} (${dto.type}) was added to ledger "${ledger.name}".`,
+        body_ur: `کھاتہ "${ledger.name}" میں PKR ${dto.amount} (${dto.type}) کی ٹرانزیکشن شامل کی گئی ہے۔`,
+        metadata: JSON.stringify({ ledgerId, transactionId: transaction.id }),
+      },
+    });
+
     // Emit WebSocket notification to farmer
     this.ledgerGateway.emitToFarmer(ledger.farmer.userId, 'transaction:added', transaction);
 
@@ -361,16 +479,30 @@ export class FarmerService {
    */
   async getArtiaFarmersDashboard(artiaId: number) {
     const profiles = await this.prisma.farmerProfile.findMany({
-      where: { artiaId },
+      where: {
+        connections: {
+          some: { artiaId },
+        },
+      },
       include: {
         user: {
           select: {
-            id: true, name: true, phone: true, email: true,
-            profileImage: true, city: true, address: true, status: true,
+            id: true,
+            name: true,
+            phone: true,
+            email: true,
+            profileImage: true,
+            city: true,
+            address: true,
+            status: true,
           },
         },
         mandi: true,
+        connections: {
+          where: { artiaId },
+        },
         ledgers: {
+          where: { createdByArtiaId: artiaId },
           include: {
             transactions: { orderBy: { createdAt: 'desc' } },
           },
@@ -379,9 +511,13 @@ export class FarmerService {
       },
     });
 
-    return profiles.map(profile => {
-      const ledgersWithBalance = profile.ledgers.map(ledger => {
-        const balance = ledger.transactions.reduce((sum, tx) => {
+    return (profiles as any[]).map((profile: any) => {
+      const connectionPhone = profile.connections?.[0]?.phone;
+      if (profile.user && connectionPhone) {
+        profile.user.phone = connectionPhone;
+      }
+      const ledgersWithBalance = (profile.ledgers || []).map((ledger: any) => {
+        const balance = (ledger.transactions || []).reduce((sum: number, tx: any) => {
           return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
         }, 0);
         return { ...ledger, balance };
@@ -395,8 +531,18 @@ export class FarmerService {
    */
   async getFarmerLedgers(artiaId: number, farmerUserId: number) {
     const profile = await this.prisma.farmerProfile.findFirst({
-      where: { userId: farmerUserId, artiaId },
-      include: { user: { select: { id: true, name: true, phone: true, email: true } } },
+      where: {
+        userId: farmerUserId,
+        connections: {
+          some: { artiaId },
+        },
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true } },
+        connections: {
+          where: { artiaId },
+        },
+      },
     });
 
     if (!profile) {
@@ -405,16 +551,21 @@ export class FarmerService {
       );
     }
 
+    const connectionPhone = (profile as any).connections?.[0]?.phone;
+    if (profile.user && connectionPhone) {
+      (profile.user as any).phone = connectionPhone;
+    }
+
     const ledgers = await this.prisma.farmerLedger.findMany({
-      where: { farmerId: profile.id },
+      where: { farmerId: profile.id, createdByArtiaId: artiaId },
       include: {
         transactions: { orderBy: { createdAt: 'desc' } },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    const ledgersWithBalance = ledgers.map(ledger => {
-      const balance = ledger.transactions.reduce((sum, tx) => {
+    const ledgersWithBalance = ledgers.map((ledger: any) => {
+      const balance = (ledger.transactions || []).reduce((sum: number, tx: any) => {
         return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
       }, 0);
       return { ...ledger, balance };
@@ -455,6 +606,19 @@ export class FarmerService {
     const balance = updated.transactions.reduce((sum, tx) => {
       return tx.type === 'CREDIT' ? sum + tx.amount : sum - tx.amount;
     }, 0);
+
+    // Create DB Notification for farmer
+    await this.prisma.notification.create({
+      data: {
+        userId: ledger.farmer.userId,
+        type: 'LEDGER_UPDATED',
+        title_en: 'Ledger Updated',
+        title_ur: 'کھاتہ اپ ڈیٹ کیا گیا',
+        body_en: `Ledger "${updated.name}" has been updated.`,
+        body_ur: `کھاتہ "${updated.name}" اپ ڈیٹ کر دیا گیا ہے۔`,
+        metadata: JSON.stringify({ ledgerId }),
+      },
+    });
 
     // Emit WebSocket notification to farmer
     this.ledgerGateway.emitToFarmer(ledger.farmer.userId, 'ledger:updated', { ...updated, balance });
@@ -562,17 +726,27 @@ export class FarmerService {
   /**
    * 14. Farmer leaves current artia (POST /farmers/leave-artia)
    */
-  async leaveArtia(farmerUserId: number) {
+  async leaveArtia(farmerUserId: number, artiaId: number) {
     const profile = await this.prisma.farmerProfile.findUnique({
       where: { userId: farmerUserId },
-      include: { user: true },
     });
 
-    if (!profile || !profile.artiaId) {
-      throw new NotFoundException('Farmer profile not found or not connected to an artia');
+    if (!profile) {
+      throw new NotFoundException('Farmer profile not found');
     }
 
-    const artiaId = profile.artiaId;
+    const connection = await this.prisma.farmerArtiaConnection.findUnique({
+      where: {
+        farmerId_artiaId: {
+          farmerId: profile.id,
+          artiaId,
+        },
+      },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('Not connected to this Artia');
+    }
 
     await this.prisma.$transaction(async (tx) => {
       // Create ArtiaFarmerHistory record
@@ -584,14 +758,9 @@ export class FarmerService {
         },
       });
 
-      // Update farmer profile to disconnect from artia
-      await tx.farmerProfile.update({
-        where: { id: profile.id },
-        data: {
-          artiaId: null,
-          showOnArtiaProfile: false,
-          shareInCount: false,
-        },
+      // Delete connection
+      await tx.farmerArtiaConnection.delete({
+        where: { id: connection.id },
       });
 
       // Delete pending CONSENT_REQUEST notification
@@ -599,6 +768,7 @@ export class FarmerService {
         where: {
           userId: farmerUserId,
           type: 'CONSENT_REQUEST',
+          metadata: { contains: `"artiaId":${artiaId}` },
         },
       });
 
@@ -622,12 +792,25 @@ export class FarmerService {
    * 15. Artia removes a farmer (POST /farmers/:farmerId/remove)
    */
   async removeFarmer(artiaUserId: number, farmerUserId: number) {
-    const profile = await this.prisma.farmerProfile.findFirst({
-      where: { userId: farmerUserId, artiaId: artiaUserId },
+    const profile = await this.prisma.farmerProfile.findUnique({
+      where: { userId: farmerUserId },
     });
 
     if (!profile) {
-      throw new NotFoundException('Farmer not found or does not belong to your account');
+      throw new NotFoundException('Farmer not found');
+    }
+
+    const connection = await this.prisma.farmerArtiaConnection.findUnique({
+      where: {
+        farmerId_artiaId: {
+          farmerId: profile.id,
+          artiaId: artiaUserId,
+        },
+      },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('Farmer is not connected to your account');
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -640,14 +823,9 @@ export class FarmerService {
         },
       });
 
-      // Update farmer profile to disconnect from artia
-      await tx.farmerProfile.update({
-        where: { id: profile.id },
-        data: {
-          artiaId: null,
-          showOnArtiaProfile: false,
-          shareInCount: false,
-        },
+      // Delete connection
+      await tx.farmerArtiaConnection.delete({
+        where: { id: connection.id },
       });
 
       // Delete pending CONSENT_REQUEST notification
@@ -655,6 +833,7 @@ export class FarmerService {
         where: {
           userId: farmerUserId,
           type: 'CONSENT_REQUEST',
+          metadata: { contains: `"artiaId":${artiaUserId}` },
         },
       });
 
@@ -674,12 +853,18 @@ export class FarmerService {
     return { message: 'Successfully removed farmer' };
   }
 
-  /**
-   * 16. Artia gets history + ledgers of left farmers (GET /farmers/artia/left-farmers)
-   */
   async getLeftFarmers(artiaUserId: number) {
     const leftHistories = await this.prisma.artiaFarmerHistory.findMany({
-      where: { artiaId: artiaUserId },
+      where: {
+        artiaId: artiaUserId,
+        farmer: {
+          farmerProfile: {
+            NOT: {
+              artiaId: artiaUserId,
+            },
+          },
+        },
+      },
       include: {
         farmer: {
           include: {
@@ -734,12 +919,22 @@ export class FarmerService {
     return result.filter((item: any) => item !== null);
   }
 
-  /**
-   * 17. Farmer gets history + ledgers from past artias (GET /farmers/previous-artias)
-   */
   async getPreviousArtias(farmerUserId: number) {
+    const farmerProfile = await this.prisma.farmerProfile.findUnique({
+      where: { userId: farmerUserId },
+    });
+
+    const currentArtiaId = farmerProfile?.artiaId;
+
     const leftHistories = await this.prisma.artiaFarmerHistory.findMany({
-      where: { farmerId: farmerUserId },
+      where: {
+        farmerId: farmerUserId,
+        ...(currentArtiaId && {
+          NOT: {
+            artiaId: currentArtiaId,
+          },
+        }),
+      },
       include: {
         artia: {
           include: {

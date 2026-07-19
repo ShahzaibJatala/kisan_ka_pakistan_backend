@@ -16,6 +16,27 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RateLimiterGuard } from './guards/rate-limiter.guard';
 import { OtpRateLimiterGuard } from './guards/otp-rate-limiter.guard';
 
+const getRefreshCookieOptions = () => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const cookieDomain = process.env.COOKIE_DOMAIN;
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    maxAge: 7 * 24 * 3600000, // 7 days
+    path: '/',
+    sameSite: 'lax' as const,
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
+  };
+};
+
+const getClearCookieOptions = () => {
+  const cookieDomain = process.env.COOKIE_DOMAIN;
+  return {
+    path: '/',
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
+  };
+};
+
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
@@ -30,12 +51,7 @@ export class AuthController {
     const result = await this.authService.login(user);
 
     // Set refresh token in httpOnly cookie
-    res.cookie('refresh_token', result.refresh_token, {
-      httpOnly: true,
-      secure: false, // Set to true in production if using HTTPS
-      maxAge: 7 * 24 * 3600000, // 7 days
-      path: '/',
-    });
+    res.cookie('refresh_token', result.refresh_token, getRefreshCookieOptions());
 
     const { refresh_token, ...responseBody } = result;
     return responseBody;
@@ -44,17 +60,17 @@ export class AuthController {
   @Post('google')
   async googleLogin(
     @Body('idToken') idToken: string,
+    @Body('phone') phone: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.googleLogin(idToken);
+    const result = await this.authService.googleLogin(idToken, phone);
+
+    if ('requirePhone' in result && result.requirePhone) {
+      return result;
+    }
 
     // Set refresh token in httpOnly cookie
-    res.cookie('refresh_token', result.refresh_token, {
-      httpOnly: true,
-      secure: false, // Set to true in production if using HTTPS
-      maxAge: 7 * 24 * 3600000, // 7 days
-      path: '/',
-    });
+    res.cookie('refresh_token', result.refresh_token, getRefreshCookieOptions());
 
     const { refresh_token, ...responseBody } = result;
     return responseBody;
@@ -83,7 +99,9 @@ export class AuthController {
    */
   @UseGuards(JwtRefreshGuard)
   @Post('refresh')
-  async refresh(@Req() req: any) {
+  async refresh(
+    @Req() req: any,
+  ) {
     return this.authService.refreshAccessToken(req.user);
   }
 
@@ -97,8 +115,18 @@ export class AuthController {
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    res.clearCookie('refresh_token', { path: '/' });
+    res.clearCookie('refresh_token', getClearCookieOptions());
     return this.authService.logout(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  async logoutAll(
+    @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.clearCookie('refresh_token', getClearCookieOptions());
+    return this.authService.logoutAll(req.user.id);
   }
 
   @Get('dashboard-login')
@@ -107,19 +135,7 @@ export class AuthController {
     const { accessToken, refreshToken } =
       await this.authService.generateTokens(user);
 
-    // Set HTTP-only cookies for both access and refresh tokens
-    res.cookie('access_token', accessToken, {
-      httpOnly: true,
-      secure: false,
-      maxAge: 15 * 60 * 1000, // 15 minutes
-      path: '/',
-    });
-    res.cookie('refresh_token', refreshToken, {
-      httpOnly: true,
-      secure: false,
-      maxAge: 7 * 24 * 3600000, // 7 days
-      path: '/',
-    });
+    res.cookie('refresh_token', refreshToken, getRefreshCookieOptions());
 
     // Redirect to frontend dashboard with role-based path
     let baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -145,18 +161,7 @@ export class AuthController {
   ) {
     const result = await this.authService.superAdminVerifyOtp(dto);
 
-    res.cookie('access_token', result.accessToken, {
-      httpOnly: true,
-      secure: false,
-      maxAge: 15 * 60 * 1000,
-      path: '/',
-    });
-    res.cookie('refresh_token', result.refreshToken, {
-      httpOnly: true,
-      secure: false,
-      maxAge: 7 * 24 * 3600000,
-      path: '/',
-    });
+    res.cookie('refresh_token', result.refreshToken, getRefreshCookieOptions());
 
     return res.json({
       message: result.message,

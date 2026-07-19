@@ -6,6 +6,7 @@ import {
   Body,
   Req,
   Param,
+  Query,
   ParseIntPipe,
   UseGuards,
 } from '@nestjs/common';
@@ -79,16 +80,27 @@ export class FarmerController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.FARMER)
   @Get('me/ledgers')
-  async getLedger(@Req() req: RequestWithUser) {
-    return this.farmerService.getLedger(req.user.id);
+  async getLedger(@Req() req: RequestWithUser, @Query('artiaId') artiaId?: string) {
+    return this.farmerService.getLedger(req.user.id, artiaId ? Number(artiaId) : undefined);
+  }
+
+  /** Connected Artias grouped by Mandi for the farmer dashboard switcher. */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Get('me/connections')
+  async getConnections(@Req() req: RequestWithUser) {
+    return this.farmerService.getConnections(req.user.id);
   }
 
   /** POST /farmers/leave-artia — Farmer leaves current artia */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.FARMER)
   @Post('leave-artia')
-  async leaveArtia(@Req() req: RequestWithUser) {
-    return this.farmerService.leaveArtia(req.user.id);
+  async leaveArtia(
+    @Req() req: RequestWithUser,
+    @Body('artiaId', ParseIntPipe) artiaId: number,
+  ) {
+    return this.farmerService.leaveArtia(req.user.id, artiaId);
   }
 
   /** GET /farmers/previous-artias — Farmer gets previous artias + ledger summaries */

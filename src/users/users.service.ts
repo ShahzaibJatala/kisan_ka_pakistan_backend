@@ -7,11 +7,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateArtiaProfileDto } from './dto/update-artia-profile.dto';
 import { UpdateFarmerPrivacyDto } from './dto/update-farmer-privacy.dto';
+import { UpdateFarmerProfileDto } from './dto/update-farmer-profile.dto';
 import * as bcrypt from 'bcrypt';
 import { Role, UserStatus } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../mail/mail.service';
 import { RedisService } from '../redis/redis.service';
+import { BypassService } from '../bypass/bypass.service';
 
 // Cache TTL constants
 const ARTIA_PROFILE_TTL = 86400;  // 24 hours
@@ -24,6 +26,7 @@ export class UsersService {
     private jwtService: JwtService,
     private mailService: MailService,
     private redisService: RedisService,
+    private bypassService: BypassService,
   ) {}
 
   async create(
@@ -31,6 +34,10 @@ export class UsersService {
     creatorRole?: Role,
     creatorId?: number,
   ) {
+    createUserDto.phone = createUserDto.phone?.trim() || undefined;
+    createUserDto.email = createUserDto.email?.trim() || undefined;
+    createUserDto.cnic = createUserDto.cnic?.trim() || undefined;
+
     const targetRole = createUserDto.role || Role.FARMER;
 
     if (targetRole === Role.ARTIA) {
@@ -51,7 +58,70 @@ export class UsersService {
       throw new BadRequestException('Either phone or email must be provided.');
     }
 
-    // check existence
+    const sanitizedCnic = createUserDto.cnic ? createUserDto.cnic.replace(/-/g, '') : null;
+
+    // --- Farmer Specific Connection Logic ---
+    if (targetRole === Role.FARMER && sanitizedCnic) {
+      // Check if a farmer with this CNIC already exists
+      const existingFarmer = await this.prisma.user.findFirst({
+        where: { cnic: sanitizedCnic, role: Role.FARMER },
+        include: { farmerProfile: true },
+      });
+
+      if (existingFarmer) {
+        if (!existingFarmer.farmerProfile) {
+          throw new BadRequestException('Farmer profile not found for this CNIC.');
+        }
+
+        // Validate phone uniqueness
+        if (createUserDto.phone) {
+          await this.bypassService.validatePhoneUniqueness(createUserDto.phone, sanitizedCnic);
+        }
+
+        if (creatorId === undefined) {
+          throw new BadRequestException('Creator ID is required.');
+        }
+
+        // Check limits
+        const limitResult = await this.bypassService.checkFarmerJoinLimits(
+          existingFarmer.farmerProfile.id,
+          creatorId,
+          sanitizedCnic,
+        );
+
+        if (!limitResult.allowed) {
+          throw new BadRequestException({
+            error: 'LIMIT_HIT',
+            reason: limitResult.reason,
+          });
+        }
+
+        // Establish the new connection
+        await this.prisma.farmerArtiaConnection.create({
+          data: {
+            farmerId: existingFarmer.farmerProfile.id,
+            artiaId: creatorId,
+            phone: createUserDto.phone || null,
+          },
+        });
+
+        // Update profile mandiId if not set
+        if (!existingFarmer.farmerProfile.mandiId) {
+          const artia = await this.prisma.user.findUnique({ where: { id: creatorId } });
+          if (artia?.mandiId) {
+            await this.prisma.farmerProfile.update({
+              where: { id: existingFarmer.farmerProfile.id },
+              data: { mandiId: artia.mandiId },
+            });
+          }
+        }
+
+        const { password, ...result } = existingFarmer;
+        return result;
+      }
+    }
+
+    // check existence for new account
     if (createUserDto.phone) {
       const existing = await this.findByPhone(createUserDto.phone);
       if (existing) throw new BadRequestException('Phone already exists');
@@ -59,6 +129,12 @@ export class UsersService {
     if (createUserDto.email) {
       const existing = await this.findByEmail(createUserDto.email);
       if (existing) throw new BadRequestException('Email already exists');
+    }
+    if (sanitizedCnic) {
+      const existing = await this.prisma.user.findFirst({
+        where: { cnic: sanitizedCnic },
+      });
+      if (existing) throw new BadRequestException('CNIC already exists');
     }
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
@@ -86,7 +162,7 @@ export class UsersService {
         password: hashedPassword,
         phone: createUserDto.phone,
         email: createUserDto.email,
-        cnic: createUserDto.cnic,
+        cnic: sanitizedCnic,
         role: targetRole,
         status: finalStatus,
         profileImage: createUserDto.profileImage,
@@ -99,16 +175,26 @@ export class UsersService {
       },
     });
 
-    // --- FIX: Create FarmerProfile for Farmers ---
+    // --- Create FarmerProfile and Connection ---
     if (targetRole === Role.FARMER) {
       const artiaId = creatorRole === Role.ARTIA ? creatorId : null;
-      await this.prisma.farmerProfile.create({
+      const profile = await this.prisma.farmerProfile.create({
         data: {
           userId: user.id,
           artiaId: artiaId,
           mandiId: createUserDto.mandiId || null,
         }
       });
+
+      if (artiaId) {
+        await this.prisma.farmerArtiaConnection.create({
+          data: {
+            farmerId: profile.id,
+            artiaId: artiaId,
+            phone: createUserDto.phone || null,
+          }
+        });
+      }
     }
 
     const { password, ...result } = user;
@@ -118,11 +204,15 @@ export class UsersService {
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
       
-      await this.mailService.sendVerificationSuccessMail(
-        user.email,
-        loginUrl,
-        user.role,
-      );
+      try {
+        await this.mailService.sendVerificationSuccessMail(
+          user.email,
+          loginUrl,
+          user.role,
+        );
+      } catch (mailError) {
+        console.error('Failed to send verification success email:', mailError);
+      }
     }
 
     return result;
@@ -228,24 +318,29 @@ export class UsersService {
     };
     const token = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-    const verifyUrl = `${process.env.BACKEND_URL}/users/confirm-verification?token=${token}`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const verifyUrl = `${frontendUrl}/verify-user?token=${token}`;
 
     if (!verifier.email) {
       throw new BadRequestException('Verifier has no registered email address');
     }
 
-    await this.mailService.sendVerificationRequestMail(
-      verifier.email,
-      requester,
-      verifyUrl,
-    );
+    try {
+      await this.mailService.sendVerificationRequestMail(
+        verifier.email,
+        requester,
+        verifyUrl,
+      );
+    } catch (mailError) {
+      console.error('Failed to send verification request email:', mailError);
+    }
 
     return {
       message: 'Verification request sent successfully to ' + verifier.name,
     };
   }
 
-  async confirmVerification(token: string) {
+  async confirmVerification(token: string, activeUserId?: number) {
     let payload: any;
     try {
       payload = this.jwtService.verify(token);
@@ -258,6 +353,13 @@ export class UsersService {
     }
 
     const { userId, verifierId } = payload;
+
+    if (activeUserId && activeUserId !== verifierId) {
+      const activeUser = await this.prisma.user.findUnique({ where: { id: activeUserId } });
+      if (!activeUser || (activeUser.role !== Role.SUPER_ADMIN && activeUserId !== verifierId)) {
+        throw new BadRequestException('You are not authorized to verify this request.');
+      }
+    }
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
@@ -300,11 +402,15 @@ export class UsersService {
     const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
 
     if (user.email) {
-      await this.mailService.sendVerificationSuccessMail(
-        user.email,
-        loginUrl,
-        user.role,
-      );
+      try {
+        await this.mailService.sendVerificationSuccessMail(
+          user.email,
+          loginUrl,
+          user.role,
+        );
+      } catch (mailError) {
+        console.error('Failed to send verification success email:', mailError);
+      }
     }
 
     return {
@@ -325,11 +431,15 @@ export class UsersService {
     const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
 
     if (user.email) {
-      await this.mailService.sendVerificationSuccessMail(
-        user.email,
-        loginUrl,
-        user.role,
-      );
+      try {
+        await this.mailService.sendVerificationSuccessMail(
+          user.email,
+          loginUrl,
+          user.role,
+        );
+      } catch (mailError) {
+        console.error('Failed to send verification success email:', mailError);
+      }
     }
     return { message: 'Verification success email sent to ' + user.email };
   }
@@ -452,10 +562,14 @@ export class UsersService {
       };
       const token = this.jwtService.sign(payload, { expiresIn: '7d' });
 
-      // Verify URL
-      const verifyUrl = `${process.env.BACKEND_URL}/users/confirm-verification?token=${token}`;
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      const verifyUrl = `${frontendUrl}/verify-user?token=${token}`;
 
-      await this.mailService.sendVerificationRequestMail(superAdminEmail, user, verifyUrl);
+      try {
+        await this.mailService.sendVerificationRequestMail(superAdminEmail, user, verifyUrl);
+      } catch (mailError) {
+        console.error('Failed to send verification request email to super admin:', mailError);
+      }
 
       const { password, ...result } = user;
       return {
@@ -508,19 +622,28 @@ export class UsersService {
   async getArtiaFarmers(artiaId: number) {
     const profiles = await this.prisma.farmerProfile.findMany({
       where: {
-        artiaId: artiaId,
+        connections: {
+          some: { artiaId },
+        },
       },
       include: {
         user: true,
         mandi: true,
+        connections: {
+          where: { artiaId },
+        },
       },
     });
 
     return {
       count: profiles.length,
       farmers: profiles.map(profile => {
+        const connectionPhone = profile.connections?.[0]?.phone;
         if (profile.user) {
           const { password, ...safeUser } = profile.user;
+          if (connectionPhone) {
+            safeUser.phone = connectionPhone;
+          }
           return { ...profile, user: safeUser };
         }
         return profile;
@@ -642,7 +765,10 @@ export class UsersService {
       role: Role.FARMER,
       status: UserStatus.VERIFIED,
       farmerProfile: {
-        artiaId: null,
+        // A farmer is independent only when they have no active join-table
+        // connection. This excludes farmers who left an Artia but still have
+        // legacy profile fields from an older relationship.
+        connections: { none: {} },
       },
     };
 
@@ -681,8 +807,21 @@ export class UsersService {
       throw new BadRequestException('Farmer is not verified.');
     }
 
-    if (farmer.farmerProfile?.artiaId) {
-      throw new BadRequestException('Farmer is already connected to an Artia.');
+    if (!farmer.farmerProfile) {
+      throw new BadRequestException('Farmer profile not found.');
+    }
+
+    const limitResult = await this.bypassService.checkFarmerJoinLimits(
+      farmer.farmerProfile.id,
+      artiaId,
+      farmer.cnic || '',
+    );
+
+    if (!limitResult.allowed) {
+      throw new BadRequestException({
+        error: 'LIMIT_HIT',
+        reason: limitResult.reason,
+      });
     }
 
     return this.prisma.connectionRequest.upsert({
@@ -785,6 +924,29 @@ export class UsersService {
       throw new BadRequestException('Artia not found.');
     }
 
+    const farmer = await this.prisma.user.findUnique({
+      where: { id: farmerId },
+      include: { farmerProfile: true },
+    });
+
+    if (!farmer || !farmer.farmerProfile) {
+      throw new BadRequestException('Farmer profile not found.');
+    }
+
+    // Check limits
+    const limitResult = await this.bypassService.checkFarmerJoinLimits(
+      farmer.farmerProfile.id,
+      request.artiaId,
+      farmer.cnic || '',
+    );
+
+    if (!limitResult.allowed) {
+      throw new BadRequestException({
+        error: 'LIMIT_HIT',
+        reason: limitResult.reason,
+      });
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // 1. Accept request
       await tx.connectionRequest.update({
@@ -792,31 +954,30 @@ export class UsersService {
         data: { status: 'ACCEPTED' },
       });
 
-      // 2. Reject other requests for this farmer
-      await tx.connectionRequest.updateMany({
-        where: {
-          farmerId,
-          status: 'PENDING',
-        },
-        data: { status: 'REJECTED' },
-      });
-
-      // 3. Connect farmer to Artia's profile & Mandi
-      await tx.farmerProfile.update({
-        where: { userId: farmerId },
+      // 2. Establish connection
+      await (tx as any).farmerArtiaConnection.create({
         data: {
+          farmerId: farmer.farmerProfile!.id,
           artiaId: request.artiaId,
-          mandiId: artia.mandiId,
+          phone: farmer.phone,
         },
       });
 
-      // 4. Update mandiId on base User model
-      await tx.user.update({
-        where: { id: farmerId },
-        data: {
-          mandiId: artia.mandiId,
-        },
-      });
+      // 3. Update mandiId on profile if not set
+      if (!farmer.farmerProfile!.mandiId) {
+        await (tx as any).farmerProfile.update({
+          where: { id: farmer.farmerProfile!.id },
+          data: { mandiId: artia.mandiId },
+        });
+      }
+
+      // 4. Update mandiId on base User model if not set
+      if (!farmer.mandiId) {
+        await (tx as any).user.update({
+          where: { id: farmerId },
+          data: { mandiId: artia.mandiId },
+        });
+      }
 
       return { success: true };
     });
@@ -950,6 +1111,96 @@ export class UsersService {
     }
 
     return updated;
+  }
+
+  async getFarmerProfile(farmerId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: farmerId },
+      include: { farmerProfile: true },
+    });
+    if (!user) {
+      throw new NotFoundException('Farmer not found');
+    }
+    // Ensure farmerProfile exists
+    if (!user.farmerProfile) {
+      const profile = await this.prisma.farmerProfile.create({
+        data: { userId: farmerId },
+      });
+      user.farmerProfile = profile;
+    }
+    return user;
+  }
+
+  async updateFarmerProfile(farmerId: number, dto: UpdateFarmerProfileDto) {
+    const {
+      name,
+      email,
+      phone,
+      cnic,
+      address,
+      city,
+      landSize,
+      mandiId,
+      showOnArtiaProfile,
+      shareInCount,
+      showOwnDetailsPublicly,
+    } = dto;
+
+    // Check unique constraints on phone, cnic, email
+    if (phone) {
+      const existing = await this.prisma.user.findFirst({
+        where: { phone, NOT: { id: farmerId } },
+      });
+      if (existing) {
+        throw new BadRequestException('This phone number is already registered under another account.');
+      }
+    }
+    if (email) {
+      const existing = await this.prisma.user.findFirst({
+        where: { email, NOT: { id: farmerId } },
+      });
+      if (existing) {
+        throw new BadRequestException('This email is already registered under another account.');
+      }
+    }
+    if (cnic) {
+      const existing = await this.prisma.user.findFirst({
+        where: { cnic, NOT: { id: farmerId } },
+      });
+      if (existing) {
+        throw new BadRequestException('This CNIC is already registered under another account.');
+      }
+    }
+
+    // Update user
+    await this.prisma.user.update({
+      where: { id: farmerId },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(email !== undefined && { email }),
+        ...(phone !== undefined && { phone }),
+        ...(cnic !== undefined && { cnic }),
+        ...(address !== undefined && { address }),
+        ...(city !== undefined && { city }),
+      },
+    });
+
+    // Update farmer profile
+    const updatedProfile = await this.prisma.farmerProfile.update({
+      where: { userId: farmerId },
+      data: {
+        ...(landSize !== undefined && { landSize }),
+        ...(mandiId !== undefined && { mandiId }),
+        ...(showOnArtiaProfile !== undefined && { showOnArtiaProfile }),
+        ...(shareInCount !== undefined && { shareInCount }),
+        ...(showOwnDetailsPublicly !== undefined && { showOwnDetailsPublicly }),
+      },
+    });
+
+    return {
+      message: 'Profile updated successfully',
+      profile: updatedProfile,
+    };
   }
 
   async getNotifications(userId: number) {
@@ -1129,6 +1380,7 @@ export class UsersService {
         address: true,
         mandi: {
           select: {
+            id: true,
             name: true,
             city: true,
           },

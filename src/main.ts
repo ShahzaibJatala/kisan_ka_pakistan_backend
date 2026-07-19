@@ -3,7 +3,7 @@ dotenv.config(); // This MUST happen before any other imports that use the DB
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, BadRequestException } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 
 async function bootstrap() {
@@ -15,6 +15,15 @@ async function bootstrap() {
       transform: true,       // auto-transform payloads to DTO types
       whitelist: true,       // strip unknown properties
       forbidNonWhitelisted: false,
+      exceptionFactory: (errors) => {
+        const messages = errors.flatMap((error) => {
+          if (error.constraints) {
+            return Object.values(error.constraints);
+          }
+          return [];
+        });
+        return new BadRequestException(messages[0] || 'Bad Request');
+      },
     }),
   );
 
