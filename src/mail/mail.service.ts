@@ -1,20 +1,34 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class MailService {
+  private otpTransporter?: nodemailer.Transporter;
   constructor(
     @InjectQueue('mail-queue') private readonly mailQueue: Queue,
   ) {}
 
   async sendOtpMail(to: string, otp: string) {
+    const user = process.env.USER_EMAIL;
+    const pass = process.env.USER_PASSWORD;
+    if (!user || !pass) throw new InternalServerErrorException('Email delivery is not configured. Please contact support.');
     try {
-      await this.mailQueue.add('sendOtpMail', { to, otp });
+      this.otpTransporter ??= nodemailer.createTransport({
+        host: 'smtp.gmail.com', port: 465, secure: true,
+        connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
+        auth: { user, pass },
+      });
+      await this.otpTransporter.sendMail({
+        from: `"Kisan ka Pakistan Support" <${user}>`, to, replyTo: user,
+        subject: `Your Kisan ka Pakistan Verification Code: ${otp}`,
+        text: `Your password reset verification code is ${otp}. It expires in 5 minutes. If you did not request it, you can ignore this email.`,
+      });
       return { success: true };
     } catch (error) {
-      console.error('Mail Queue Error:', error);
-      throw new InternalServerErrorException('Failed to enqueue reset email');
+      console.error('OTP email delivery error:', error);
+      throw new InternalServerErrorException('We could not send the verification email. Please try again in a moment.');
     }
   }
 

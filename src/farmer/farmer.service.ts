@@ -20,6 +20,8 @@ import { UpdateLedgerDto } from './dto/update-ledger.dto';
 import { AddTransactionDto } from './dto/add-transaction.dto';
 import { LedgerGateway } from './ledger.gateway';
 import { BypassService } from '../bypass/bypass.service';
+import { v2 as cloudinary } from 'cloudinary';
+import { unlink } from 'fs/promises';
 
 @Injectable()
 export class FarmerService {
@@ -322,10 +324,14 @@ export class FarmerService {
     }
 
     if (artiaId) {
+      const artia = await this.prisma.user.findFirst({ where: { id: artiaId, role: Role.ARTIA }, select: { status: true } });
+      if (!artia) throw new NotFoundException('Artia not found.');
+      if (artia.status === UserStatus.SUSPENDED) throw new ForbiddenException('This Artia account is suspended. Please contact the officials.');
       const connection = await this.prisma.farmerArtiaConnection.findUnique({
         where: { farmerId_artiaId: { farmerId: profile.id, artiaId } },
       });
       if (!connection) throw new NotFoundException('Artia connection not found');
+      if (connection.status === 'SUSPENDED') throw new ForbiddenException('Your account is suspended with this Artia. Please contact the officials.');
     }
 
     const ledgers = await this.prisma.farmerLedger.findMany({
@@ -366,15 +372,15 @@ export class FarmerService {
       include: {
         artia: {
           select: {
-            id: true, name: true, phone: true, mandiId: true,
+            id: true, name: true, phone: true, mandiId: true, status: true,
             mandi: { select: { id: true, name: true, city: true } },
           },
         },
       },
       orderBy: { createdAt: 'asc' },
     });
-    return connections.map(({ id, phone, createdAt, artia }) => ({
-      id, phone, createdAt, artia,
+    return connections.map(({ id, phone, createdAt, status, statusReason, artia }) => ({
+      id, phone, createdAt, status, statusReason, artia,
     }));
   }
 
@@ -426,7 +432,7 @@ export class FarmerService {
   /**
    * 7. Artia adds a transaction to a farmer's ledger (POST /farmers/ledgers/:ledgerId/transactions)
    */
-  async addTransaction(artiaId: number, ledgerId: number, dto: AddTransactionDto) {
+  async addTransaction(artiaId: number, ledgerId: number, dto: AddTransactionDto, image?: Express.Multer.File) {
     // Verify the ledger was created by this artia
     const ledger = await this.prisma.farmerLedger.findFirst({
       where: { id: ledgerId, createdByArtiaId: artiaId },
@@ -437,6 +443,28 @@ export class FarmerService {
       throw new NotFoundException(
         'Ledger not found or you do not have permission to manage it.',
       );
+    }
+
+    let imageUrl: string | null = null;
+    if (image) {
+      if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+        await unlink(image.path).catch(() => undefined);
+        throw new BadRequestException('Transaction image uploads are not configured.');
+      }
+      cloudinary.config({
+        cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+        api_key: process.env.CLOUDINARY_API_KEY,
+        api_secret: process.env.CLOUDINARY_API_SECRET,
+      });
+      try {
+        const uploaded = await cloudinary.uploader.upload(image.path, {
+          folder: 'kisan-ka-pakistan/transactions',
+          resource_type: 'image',
+        });
+        imageUrl = uploaded.secure_url;
+      } finally {
+        await unlink(image.path).catch(() => undefined);
+      }
     }
 
     const transaction = await this.prisma.transaction.create({
@@ -452,6 +480,7 @@ export class FarmerService {
         commission: dto.commission !== undefined ? dto.commission : null,
         expenses: dto.expenses !== undefined ? dto.expenses : null,
         net: dto.net !== undefined ? dto.net : null,
+        imageUrl,
       },
     });
 

@@ -135,4 +135,14 @@ export class PricesService {
 
     return result;
   }
+
+  async createProductListing(dto: { productName: string; quantity: number; unit: string; askingPrice: number; description?: string; phone: string; district?: string; city?: string }, farmerId: number) {
+    return this.prisma.productListing.create({ data: { ...dto, farmerId } });
+  }
+
+  async findProductListings(district?: string, city?: string, product?: string) {
+    const where: any = { ...(district ? { district } : {}), ...(city ? { city } : {}) };
+    if (product) where.productName = { contains: product, mode: 'insensitive' };
+    return this.prisma.productListing.findMany({ where, orderBy: { createdAt: 'desc' }, include: { farmer: { select: { name: true } } } });
+  }
 }

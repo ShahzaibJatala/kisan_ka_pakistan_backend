@@ -62,12 +62,34 @@ export class BypassService {
       throw new NotFoundException('Target Artia not found');
     }
 
-    const connections = await this.prisma.farmerArtiaConnection.findMany({
-      where: { farmerId: farmerProfileId },
-      include: {
-        artia: true,
-      },
-    });
+    const [storedConnections, farmerProfile] = await Promise.all([
+      this.prisma.farmerArtiaConnection.findMany({
+        where: { farmerId: farmerProfileId },
+        include: { artia: true },
+      }),
+      this.prisma.farmerProfile.findUnique({
+        where: { id: farmerProfileId },
+        select: { artiaId: true },
+      }),
+    ]);
+
+    // Farmers created before multi-Artia support have their first connection
+    // only in FarmerProfile.artiaId. Treat it exactly like a join-table
+    // connection so the same-Mandi and total limits apply consistently.
+    const connections = [...storedConnections];
+    if (farmerProfile?.artiaId && !connections.some((connection) => connection.artiaId === farmerProfile.artiaId)) {
+      const primaryArtia = await this.prisma.user.findUnique({ where: { id: farmerProfile.artiaId } });
+      if (primaryArtia) connections.push({
+        id: 0,
+        farmerId: farmerProfileId,
+        artiaId: primaryArtia.id,
+        phone: null,
+        status: 'ACTIVE',
+        statusReason: null,
+        createdAt: primaryArtia.createdAt,
+        artia: primaryArtia,
+      });
+    }
 
     // Check if already connected
     if (connections.some((c) => c.artiaId === targetArtiaId)) {
@@ -253,7 +275,7 @@ export class BypassService {
   /**
    * 5. Approve a bypass request
    */
-  async approveBypassRequest(requestId: number, approverId: number) {
+  async approveBypassRequest(requestId: number, approverId: number, reason?: string) {
     const request = await this.prisma.joinBypassRequest.findUnique({
       where: { id: requestId },
     });
@@ -266,19 +288,40 @@ export class BypassService {
       throw new BadRequestException('You are not authorized to approve this request.');
     }
 
-    await this.prisma.joinBypassRequest.update({
-      where: { id: requestId },
-      data: {
-        status: 'APPROVED',
-        approvedById: approverId,
-      },
+    const farmer = await this.prisma.user.findFirst({
+      where: { role: Role.FARMER, cnic: request.farmerCnic },
+      include: { farmerProfile: true },
     });
+    if (!farmer?.farmerProfile) throw new NotFoundException('Farmer profile for this request was not found.');
+
+    // Approval is the final verification step for an extra connection. Only at
+    // this point does the farmer become connected to the requested Artia.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.joinBypassRequest.update({ where: { id: requestId }, data: { status: 'APPROVED', approvedById: approverId, decisionReason: reason?.trim() || null } });
+      await tx.farmerArtiaConnection.upsert({
+        where: { farmerId_artiaId: { farmerId: farmer.farmerProfile!.id, artiaId: target.id } },
+        create: { farmerId: farmer.farmerProfile!.id, artiaId: target.id, phone: request.farmerPhone },
+        update: { phone: request.farmerPhone },
+      });
+      await tx.connectionRequest.upsert({
+        where: { artiaId_farmerId: { artiaId: target.id, farmerId: farmer.id } },
+        create: { artiaId: target.id, farmerId: farmer.id, status: 'ACCEPTED' },
+        update: { status: 'ACCEPTED' },
+      });
+      if (!farmer.farmerProfile!.mandiId) {
+        await tx.farmerProfile.update({ where: { id: farmer.farmerProfile!.id }, data: { mandiId: target.mandiId } });
+      }
+      if (!farmer.mandiId) {
+        await tx.user.update({ where: { id: farmer.id }, data: { mandiId: target.mandiId } });
+      }
+    });
+    return { success: true };
   }
 
   /**
    * 6. Reject a bypass request
    */
-  async rejectBypassRequest(requestId: number, approverId: number) {
+  async rejectBypassRequest(requestId: number, approverId: number, reason?: string) {
     const request = await this.prisma.joinBypassRequest.findUnique({
       where: { id: requestId },
     });
@@ -293,10 +336,7 @@ export class BypassService {
 
     await this.prisma.joinBypassRequest.update({
       where: { id: requestId },
-      data: {
-        status: 'REJECTED',
-        approvedById: approverId,
-      },
+      data: { status: 'REJECTED', approvedById: approverId, decisionReason: reason?.trim() || null },
     });
   }
 }

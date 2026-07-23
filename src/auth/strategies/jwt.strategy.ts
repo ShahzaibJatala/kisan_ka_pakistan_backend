@@ -2,6 +2,9 @@ import { Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
 import { Injectable } from '@nestjs/common';
 import type { Request } from 'express';
+import { ForbiddenException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { Role, UserStatus } from '@prisma/client';
 
 const cookieOrHeaderExtractor = (req: Request): string | null => {
   console.log('[JwtStrategy] Extracting token from request...');
@@ -32,7 +35,7 @@ const cookieOrHeaderExtractor = (req: Request): string | null => {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor() {
+  constructor(private readonly prisma: PrismaService) {
     super({
       jwtFromRequest: cookieOrHeaderExtractor,
       ignoreExpiration: false,
@@ -41,12 +44,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: any) {
-    console.log('[JwtStrategy] Validating payload:', payload);
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, phone: true, email: true, role: true, status: true } });
+    if (!user) throw new ForbiddenException('Account not found. Please sign in again.');
+    if (user.status === UserStatus.SUSPENDED) throw new ForbiddenException('Your account is suspended. Please contact the officials.');
+    if (user.role === Role.SADAR && user.status !== UserStatus.VERIFIED) throw new ForbiddenException('Your Sadar account is pending verification. Please contact the officials.');
     return {
-      id: payload.sub,
-      phone: payload.phone,
-      email: payload.email,
-      role: payload.role,
+      id: user.id,
+      phone: user.phone,
+      email: user.email,
+      role: user.role,
     };
   }
 }

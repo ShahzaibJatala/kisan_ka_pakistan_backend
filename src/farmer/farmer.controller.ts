@@ -9,7 +9,13 @@ import {
   Query,
   ParseIntPipe,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname, join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
 import { Request } from 'express';
 import { FarmerService } from './farmer.service';
 import { RegisterFarmerDto } from './dto/register-farmer.dto';
@@ -31,6 +37,18 @@ interface RequestWithUser extends Request {
     role: string;
   };
 }
+
+const transactionUploadDir = join(process.cwd(), 'public', 'transaction-uploads');
+const transactionImageStorage = diskStorage({
+  destination: (_req, _file, callback) => {
+    if (!existsSync(transactionUploadDir)) mkdirSync(transactionUploadDir, { recursive: true });
+    callback(null, transactionUploadDir);
+  },
+  filename: (_req, file, callback) => callback(null, `transaction-${Date.now()}-${Math.round(Math.random() * 1e9)}${extname(file.originalname).toLowerCase()}`),
+});
+const transactionImageFilter = (_req: any, file: Express.Multer.File, callback: (error: Error | null, acceptFile: boolean) => void) => {
+  callback(null, ['image/jpeg', 'image/png'].includes(file.mimetype));
+};
 
 @Controller('farmers')
 export class FarmerController {
@@ -174,12 +192,18 @@ export class FarmerController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ARTIA)
   @Post('ledgers/:ledgerId/transactions')
+  @UseInterceptors(FileInterceptor('image', {
+    storage: transactionImageStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: transactionImageFilter,
+  }))
   async addTransaction(
     @Req() req: RequestWithUser,
     @Param('ledgerId', ParseIntPipe) ledgerId: number,
     @Body() addTransactionDto: AddTransactionDto,
+    @UploadedFile() image?: Express.Multer.File,
   ) {
-    return this.farmerService.addTransaction(req.user.id, ledgerId, addTransactionDto);
+    return this.farmerService.addTransaction(req.user.id, ledgerId, addTransactionDto, image);
   }
 
   /** PATCH /farmers/ledgers/:ledgerId — Artia edits a ledger */

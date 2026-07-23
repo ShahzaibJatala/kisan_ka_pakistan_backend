@@ -3,8 +3,6 @@ import {
   UnauthorizedException,
   BadRequestException,
   NotFoundException,
-  HttpException,
-  HttpStatus,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
@@ -25,8 +23,7 @@ import { Role, UserStatus } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
-  private lastSuperAdminAttemptTime = 0;
-  private superAdminOtp: { otp: string; expires: number } | null = null;
+    private superAdminOtp: { otp: string; expires: number } | null = null;
 
   constructor(
     private usersService: UsersService,
@@ -242,29 +239,16 @@ export class AuthService {
   }
 
   async superAdminLogin(dto: SuperAdminLoginDto) {
-    const now = Date.now();
-    const tenMinutes = 10 * 60 * 1000;
-
-    if (now - this.lastSuperAdminAttemptTime < tenMinutes) {
-      const remaining = Math.ceil(
-        (tenMinutes - (now - this.lastSuperAdminAttemptTime)) / 1000 / 60,
-      );
-      throw new HttpException(
-        `Rate limit exceeded. Try again after ${remaining} minutes.`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    this.lastSuperAdminAttemptTime = now;
+      const now = Date.now();
 
     const envUser = process.env.SUPER_ADMIN_USER_NAME;
     const envEmail = process.env.SUPER_ADMIN_EMAIL;
     const envPass = process.env.SUPER_ADMIN_PASSWORD;
 
     if (
-      dto.username !== envUser ||
-      dto.email !== envEmail ||
-      dto.password !== envPass
+        dto.email !== envEmail ||
+        dto.password !== envPass ||
+        (dto.username !== undefined && dto.username !== envUser)
     ) {
       throw new UnauthorizedException('Invalid Super Admin credentials');
     }

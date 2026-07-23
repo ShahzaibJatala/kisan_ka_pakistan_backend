@@ -139,12 +139,15 @@ export class UsersService {
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
 
-    // If an upper role is creating this user, they are automatically verified by that creator.
-    // If not (e.g. self-registration in the future), they default to PENDING.
+    // Artia-created farmers must be verified by Super Admin before they become
+    // connected. Other hierarchy-created accounts retain their current flow.
     const isCreatedByUpperRole = !!creatorId;
-    const finalStatus = isCreatedByUpperRole ? UserStatus.VERIFIED : (createUserDto.status || UserStatus.PENDING);
-    const verifiedBy = isCreatedByUpperRole ? creatorId : null;
-    const verifiedAt = isCreatedByUpperRole ? new Date() : null;
+    const requiresSuperAdminVerification = targetRole === Role.FARMER && creatorRole === Role.ARTIA;
+    const finalStatus = requiresSuperAdminVerification
+      ? UserStatus.PENDING
+      : isCreatedByUpperRole ? UserStatus.VERIFIED : (createUserDto.status || UserStatus.PENDING);
+    const verifiedBy = isCreatedByUpperRole && !requiresSuperAdminVerification ? creatorId : null;
+    const verifiedAt = isCreatedByUpperRole && !requiresSuperAdminVerification ? new Date() : null;
 
     let finalMandiId = createUserDto.mandiId || null;
     if (targetRole === Role.ARTIA && creatorId && !finalMandiId) {
@@ -177,7 +180,7 @@ export class UsersService {
 
     // --- Create FarmerProfile and Connection ---
     if (targetRole === Role.FARMER) {
-      const artiaId = creatorRole === Role.ARTIA ? creatorId : null;
+      const artiaId = creatorRole === Role.ARTIA && !requiresSuperAdminVerification ? creatorId : null;
       const profile = await this.prisma.farmerProfile.create({
         data: {
           userId: user.id,
@@ -200,7 +203,7 @@ export class UsersService {
     const { password, ...result } = user;
 
     // If verified by upper role, send them the success email with the dashboard login link
-    if (isCreatedByUpperRole && user.email) {
+    if (isCreatedByUpperRole && !requiresSuperAdminVerification && user.email) {
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       const loginUrl = frontendUrl.endsWith('/') ? `${frontendUrl}login` : `${frontendUrl}/login`;
       

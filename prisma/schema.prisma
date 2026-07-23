@@ -13,6 +13,7 @@ enum Role {
   ARTIA
   SADAR
   SUPER_ADMIN
+  PESTICIDE_SHOP_OWNER
 }
 
 enum UserStatus {
@@ -32,7 +33,8 @@ model User {
   password      String
   name          String
   role          Role       @default(FARMER)
-  status        UserStatus @default(PENDING) // Represents verification state
+    status        UserStatus @default(PENDING) // Represents verification state
+    statusReason  String?
 
   // OTP Fields
   resetOtp      String?
@@ -73,7 +75,18 @@ model User {
   // If this user is an Artia, they can manage many farmers (1-to-many)
   artiaFarmers  FarmerProfile[] @relation("ArtiaToFarmers")
 
-  notifications Notification[]
+    notifications Notification[]
+    productListings ProductListing[]
+    pesticideOwnedShops PesticideShop[] @relation("PesticideShopOwner")
+    catalogProductsSubmitted PesticideCatalogProduct[] @relation("CatalogSubmittedBy")
+    catalogProductsApproved PesticideCatalogProduct[] @relation("CatalogApprovedBy")
+    pesticideShopMemberships PesticideShopStaff[]
+    pesticideOrders PesticideOrder[] @relation("PesticideOrderCustomer")
+    pesticideReviews PesticideShopReview[]
+    pesticideArtiaConnections PesticideShopArtiaConnection[] @relation("PesticideConnectionArtia")
+    pesticideReceiptsIssued PesticideArtiaReceipt[] @relation("PesticideReceiptIssuer")
+    pesticideReceiptsAsArtia PesticideArtiaReceipt[] @relation("PesticideReceiptArtia")
+    pesticideReceiptsAsFarmer PesticideArtiaReceipt[] @relation("PesticideReceiptFarmer")
 
   // Artia-Farmer Leave History Relations
   farmerLeftHistories  ArtiaFarmerHistory[] @relation("FarmerLeftHistory")
@@ -115,6 +128,24 @@ model Price {
   user            User     @relation(fields: [userId], references: [id])
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+model ProductListing {
+  id          Int      @id @default(autoincrement())
+  productName String
+  quantity    Float
+  unit        String
+  askingPrice Float
+  description String?
+  phone       String
+  district    String?
+  city        String?
+  farmerId    Int
+  farmer      User     @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([district, city])
+  @@index([productName])
 }
 
 model Post {
@@ -196,6 +227,7 @@ model Transaction {
   commission   Float?
   expenses     Float?
   net          Float?
+  imageUrl     String?
 
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
@@ -309,7 +341,9 @@ model FarmerArtiaConnection {
   farmer    FarmerProfile @relation(fields: [farmerId], references: [id], onDelete: Cascade)
   artiaId   Int
   artia     User          @relation("ArtiaToFarmersConnection", fields: [artiaId], references: [id], onDelete: Cascade)
-  phone     String?       // Connection-specific phone number added by Artia
+    phone     String?       // Connection-specific phone number added by Artia
+    status    String        @default("ACTIVE") // ACTIVE | SUSPENDED
+    statusReason String?
   createdAt DateTime      @default(now())
 
   @@unique([farmerId, artiaId])
@@ -323,7 +357,8 @@ model JoinBypassRequest {
   farmerCnic     String
   targetArtiaId  Int
   targetArtia    User     @relation("BypassTargetArtia", fields: [targetArtiaId], references: [id])
-  reason         String?
+    reason         String?
+    decisionReason String?
   targetRole     String   // "SADAR" or "SUPER_ADMIN"
   status         String   @default("PENDING") // PENDING, APPROVED, REJECTED
   approvedById   Int?
@@ -332,3 +367,241 @@ model JoinBypassRequest {
   updatedAt      DateTime @updatedAt
 }
 
+// --- Isolated Pesticide Marketplace ---
+// Every product, order and Artia credit record is scoped to a pesticide shop.
+model PesticideShop {
+  id                 Int      @id @default(autoincrement())
+  ownerId            Int
+  owner              User     @relation("PesticideShopOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  slug               String   @unique
+  name               String
+  businessName       String?
+  description        String?
+  tagline            String?
+  phone              String
+  whatsapp           String?
+  email              String?
+  address            String?
+  city               String?
+  district           String?
+  licenseNumber      String?
+  logoUrl            String?  @default("/icon.svg")
+  coverUrl           String?
+  seoTitle           String?
+  seoDescription     String?
+  seoKeywords        String[] @default([])
+  googleBusinessUrl  String?
+  status             String   @default("PENDING") // PENDING | ACTIVE | SUSPENDED | REJECTED
+  deliveryFee        Float    @default(0)
+  ratingAverage      Float    @default(0)
+  reviewCount        Int      @default(0)
+  staff              PesticideShopStaff[]
+  products           PesticideProduct[]
+  offers             PesticideShopOffer[]
+  catalogRequests    PesticideCatalogProduct[] @relation("CatalogRequestedForShop")
+  orders             PesticideOrder[]
+  artiaConnections   PesticideShopArtiaConnection[]
+  reviews            PesticideShopReview[]
+  artiaReceipts      PesticideArtiaReceipt[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status, city, district])
+  @@index([ratingAverage])
+}
+
+// Canonical product identity. Shops cannot alter these product facts; they only
+// attach their own price and stock through PesticideShopOffer.
+model PesticideCatalogProduct {
+  id            Int      @id @default(autoincrement())
+  genericName   String
+  brand         String
+  displayName   String?
+  category      String?
+  description   String?
+  images        Json?
+  standardUnit  String?
+  status        String   @default("active") // active | pending_review | rejected
+  rejectionReason String?
+  requestedShopId Int?
+  requestedShop   PesticideShop? @relation("CatalogRequestedForShop", fields: [requestedShopId], references: [id], onDelete: SetNull)
+  submittedById Int?
+  submittedBy   User?    @relation("CatalogSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  approvedById  Int?
+  approvedBy    User?    @relation("CatalogApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  offers        PesticideShopOffer[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([genericName, brand])
+  @@index([status, category])
+  @@map("catalog_products")
+}
+
+model PesticideShopOffer {
+  id               Int      @id @default(autoincrement())
+  shopId           Int
+  shop             PesticideShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  catalogProductId Int
+  catalogProduct   PesticideCatalogProduct @relation(fields: [catalogProductId], references: [id], onDelete: Restrict)
+  price            Float
+  stockQuantity    Int      @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  orderItems       PesticideOrderItem[]
+
+  @@unique([shopId, catalogProductId])
+  @@index([catalogProductId, active])
+  @@index([shopId, active])
+  @@map("shop_offers")
+}
+
+model PesticideShopStaff {
+  id        Int           @id @default(autoincrement())
+  shopId    Int
+  shop      PesticideShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String        @default("OWNER") // OWNER | STAFF
+  createdAt DateTime      @default(now())
+
+  @@unique([shopId, userId])
+  @@index([userId])
+}
+
+model PesticideProduct {
+  id                Int           @id @default(autoincrement())
+  shopId            Int
+  shop              PesticideShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  slug              String
+  sku               String
+  name              String
+  brand             String?
+  category          String?
+  genericName       String?
+  activeIngredient  String?
+  description       String?
+  usageInstructions String?
+  safetyInformation String?
+  packSize          String
+  price             Float
+  stockQuantity     Int           @default(0)
+  lowStockThreshold Int           @default(0)
+  suitableCrops     String[]      @default([])
+  targetPests       String[]      @default([])
+  imageUrl          String?
+  isCreditEligible  Boolean       @default(false)
+  isDeliveryEligible Boolean      @default(true)
+  isActive          Boolean       @default(true)
+  orderItems        PesticideOrderItem[]
+  receiptItems      PesticideArtiaReceiptItem[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@unique([shopId, slug])
+  @@unique([shopId, sku])
+  @@index([name, category])
+  @@index([shopId, isActive])
+}
+
+model PesticideShopArtiaConnection {
+  id                Int           @id @default(autoincrement())
+  shopId            Int
+  shop              PesticideShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  artiaId           Int
+  artia             User          @relation("PesticideConnectionArtia", fields: [artiaId], references: [id], onDelete: Cascade)
+  requestedById     Int
+  shopAcceptedAt    DateTime?
+  artiaAcceptedAt   DateTime?
+  status            String        @default("PENDING") // PENDING | APPROVED | REJECTED | SUSPENDED
+  reason            String?
+  creditLimit       Float?
+  settlementTerms   String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  @@unique([shopId, artiaId])
+  @@index([artiaId, status])
+}
+
+model PesticideOrder {
+  id              Int           @id @default(autoincrement())
+  orderNumber     String        @unique
+  shopId          Int
+  shop            PesticideShop @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  customerId      Int?
+  customer        User?         @relation("PesticideOrderCustomer", fields: [customerId], references: [id], onDelete: SetNull)
+  customerName    String
+  customerPhone   String
+  customerEmail   String?
+  deliveryAddress String
+  notes           String?
+  status          String        @default("PENDING")
+  subtotal        Float
+  deliveryFee     Float         @default(0)
+  total           Float
+  items           PesticideOrderItem[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([shopId, status, createdAt])
+  @@index([customerId, createdAt])
+}
+
+model PesticideOrderItem {
+  id          Int              @id @default(autoincrement())
+  orderId     Int
+  order       PesticideOrder   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   Int?
+  product     PesticideProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  shopOfferId Int?
+  shopOffer   PesticideShopOffer? @relation(fields: [shopOfferId], references: [id], onDelete: SetNull)
+  productName String
+  sku         String?
+  quantity    Int
+  unitPrice   Float
+  lineTotal   Float
+}
+
+model PesticideShopReview {
+  id        Int           @id @default(autoincrement())
+  shopId    Int
+  shop      PesticideShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  body      String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([shopId, userId])
+  @@index([shopId, createdAt])
+}
+
+model PesticideArtiaReceipt {
+  id             Int           @id @default(autoincrement())
+  reference       String        @unique
+  shopId         Int
+  shop           PesticideShop @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  artiaId        Int
+  artia          User          @relation("PesticideReceiptArtia", fields: [artiaId], references: [id], onDelete: Restrict)
+  farmerId       Int
+  farmer         User          @relation("PesticideReceiptFarmer", fields: [farmerId], references: [id], onDelete: Restrict)
+  issuedById     Int
+  issuedBy       User          @relation("PesticideReceiptIssuer", fields: [issuedById], references: [id], onDelete: Restrict)
+  status         String        @default("ISSUED") // ISSUED | CONFIRMED | VOID
+  confirmedAt    DateTime?
+  items          PesticideArtiaReceiptItem[]
+  createdAt      DateTime      @default(now())
+}
+
+model PesticideArtiaReceiptItem {
+  id          Int                     @id @default(autoincrement())
+  receiptId   Int
+  receipt     PesticideArtiaReceipt   @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  productId   Int?
+  product     PesticideProduct?       @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName String
+  quantity    Int
+  unitPrice   Float
+}

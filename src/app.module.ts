@@ -14,6 +14,8 @@ import { FarmerModule } from './farmer/farmer.module';
 import { MandiModule } from './mandi/mandi.module';
 import { RedisModule } from './redis/redis.module';
 import { BypassModule } from './bypass/bypass.module';
+import { AdminModule } from './admin/admin.module';
+import { PesticidesModule } from './pesticides/pesticides.module';
 import { RateLimiterGuard } from './auth/guards/rate-limiter.guard';
 
 @Module({
@@ -21,11 +23,12 @@ import { RateLimiterGuard } from './auth/guards/rate-limiter.guard';
     ConfigModule.forRoot({ isGlobal: true }),
     BullModule.forRoot({
       connection: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-        username: 'default', // <-- Add this exact line
-        password: process.env.REDIS_PASSWORD,
-        tls: process.env.REDIS_HOST === 'localhost' ? undefined : {},
+        host: process.env.REDIS_CLOUD_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_CLOUD_PORT || '13671', 10),
+        username: 'default',
+        password: process.env.REDIS_CLOUD_PASSWORD,
+        // Disable TLS if connecting locally or if REDIS_CLOUD_HOST is not set
+        // tls: process.env.REDIS_CLOUD_HOST ? {} : undefined,
       },
     }),
     UsersModule,
@@ -38,6 +41,8 @@ import { RateLimiterGuard } from './auth/guards/rate-limiter.guard';
     MandiModule,
     RedisModule,
     BypassModule,
+    AdminModule,
+    PesticidesModule,
   ],
   controllers: [AppController],
   providers: [
@@ -50,5 +55,4 @@ import { RateLimiterGuard } from './auth/guards/rate-limiter.guard';
     },
   ],
 })
-export class AppModule { }
-
+export class AppModule {}

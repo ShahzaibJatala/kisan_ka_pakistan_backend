@@ -42,6 +42,18 @@ export class PricesController {
     return this.pricesService.findLatestPrices();
   }
 
+  @Get('products/listings')
+  findProductListings(@Query('district') district?: string, @Query('city') city?: string, @Query('product') product?: string) {
+    return this.pricesService.findProductListings(district, city, product);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FARMER)
+  @Post('products/listings')
+  createProductListing(@Body() dto: { productName: string; quantity: number; unit: string; askingPrice: number; description?: string; phone: string; district?: string; city?: string }, @Req() req: any) {
+    return this.pricesService.createProductListing(dto, req.user.id);
+  }
+
   // GUEST (public)
   @Get(':id')
   findOne(@Param('id') id: string) {
