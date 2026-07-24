@@ -34,6 +34,7 @@ async function bootstrap() {
       'http://localhost:3003', // isolated pesticide marketplace frontend
       'https://kisan-ka-pakistan.vercel.app',
       'https://kisan-ka-pakistan-admin-panel.vercel.app',
+      'https://pestisides-side.vercel.app',
       ...(process.env.PESTICIDES_FRONTEND_URL ? [process.env.PESTICIDES_FRONTEND_URL] : []),
     ], // Your Next.js URL
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
