@@ -9,7 +9,14 @@ import {
   Query,
   Req,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { existsSync, mkdirSync } from 'fs';
+import { extname, join } from 'path';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -28,6 +35,13 @@ import {
 } from './dto/pesticides.dto';
 import { PesticidesService } from './pesticides.service';
 
+const pesticideUploadDir = join(process.cwd(), 'public', 'pesticide-uploads');
+const pesticideImageStorage = diskStorage({
+  destination: (_req, _file, callback) => { if (!existsSync(pesticideUploadDir)) mkdirSync(pesticideUploadDir, { recursive: true }); callback(null, pesticideUploadDir); },
+  filename: (_req, file, callback) => callback(null, `pesticide-${Date.now()}-${Math.round(Math.random() * 1e9)}${extname(file.originalname).toLowerCase()}`),
+});
+const pesticideImageFilter = (_req: any, file: Express.Multer.File, callback: (error: Error | null, acceptFile: boolean) => void) => callback(null, ['image/jpeg', 'image/png'].includes(file.mimetype));
+
 @Controller('pesticides')
 export class PesticidesController {
   constructor(private readonly pesticides: PesticidesService) {}
@@ -37,6 +51,9 @@ export class PesticidesController {
   }
   @Get('products/search') search(@Query('q') q = '') {
     return this.pesticides.searchProducts(q);
+  }
+  @Get('products') products(@Query('q') q = '') {
+    return this.pesticides.publicProducts(q);
   }
   @Get('catalog/search') catalog(@Query('q') q = '') {
     return this.pesticides.searchCatalog(q);
@@ -146,6 +163,19 @@ export class PesticidesController {
     @Req() req: any,
   ) {
     return this.pesticides.updateShopProfile(shopId, req.user.id, dto);
+  }
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.PESTICIDE_SHOP_OWNER, Role.SUPER_ADMIN)
+  @Post('shops/:shopId/assets')
+  @UseInterceptors(FileInterceptor('image', { storage: pesticideImageStorage, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: pesticideImageFilter }))
+  uploadAsset(
+    @Param('shopId', ParseIntPipe) shopId: number,
+    @Body('kind') kind: string,
+    @UploadedFile() image: Express.Multer.File | undefined,
+    @Req() req: any,
+  ) {
+    if (kind !== 'logo' && kind !== 'product') throw new BadRequestException('Invalid image upload type.');
+    return this.pesticides.uploadShopAsset(shopId, req.user.id, kind, image);
   }
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.PESTICIDE_SHOP_OWNER, Role.SUPER_ADMIN)

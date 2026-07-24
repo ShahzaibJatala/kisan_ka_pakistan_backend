@@ -8,7 +8,10 @@ import {
 import { Prisma, Role, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
+import { unlink } from 'fs/promises';
+import { v2 as cloudinary } from 'cloudinary';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
 import {
   ArtiaConnectionDto,
   CheckoutPesticideDto,
@@ -45,7 +48,7 @@ const publicShopSelect = {
 
 @Injectable()
 export class PesticidesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly mailService: MailService) {}
 
   async createShop(dto: CreatePesticideShopDto) {
     if (!dto.ownerId && (!dto.ownerName || !dto.ownerEmail || !dto.ownerPhone))
@@ -191,14 +194,14 @@ export class PesticidesService {
         googleBusinessUrl: true,
         offers: {
           where: { active: true, catalogProduct: { status: 'active' } },
-          select: { id: true, price: true, stockQuantity: true, catalogProduct: { select: { id: true, genericName: true, brand: true, displayName: true, category: true, standardUnit: true, images: true } } },
+          select: { id: true, price: true, stockQuantity: true, catalogProduct: { select: { id: true, genericName: true, brand: true, displayName: true, category: true, description: true, standardUnit: true, images: true } } },
           orderBy: { updatedAt: 'desc' },
         },
       },
     });
     if (!shop) throw new NotFoundException('Pesticide shop not found.');
     const { offers, ...profile } = shop;
-    return { ...profile, products: offers.map(offer => ({ id: offer.id, catalogProductId: offer.catalogProduct.id, slug: String(offer.catalogProduct.id), name: offer.catalogProduct.displayName || offer.catalogProduct.genericName, brand: offer.catalogProduct.brand, category: offer.catalogProduct.category, packSize: offer.catalogProduct.standardUnit || 'Standard pack', price: offer.price, stockQuantity: offer.stockQuantity, imageUrl: Array.isArray(offer.catalogProduct.images) ? offer.catalogProduct.images.find((value): value is string => typeof value === 'string') : null })) };
+    return { ...profile, products: offers.map(offer => ({ id: offer.id, catalogProductId: offer.catalogProduct.id, slug: String(offer.catalogProduct.id), name: offer.catalogProduct.displayName || offer.catalogProduct.genericName, brand: offer.catalogProduct.brand, category: offer.catalogProduct.category, description: offer.catalogProduct.description, packSize: offer.catalogProduct.standardUnit || 'Standard pack', price: offer.price, stockQuantity: offer.stockQuantity, imageUrl: Array.isArray(offer.catalogProduct.images) ? offer.catalogProduct.images.find((value): value is string => typeof value === 'string') : null })) };
   }
   async searchProducts(query: string) {
     const q = query.trim().slice(0, 80);
@@ -220,6 +223,22 @@ export class PesticidesService {
       take: 60,
     });
     return offers.map(offer => ({ id: offer.id, name: offer.catalogProduct.displayName || offer.catalogProduct.genericName, brand: offer.catalogProduct.brand, slug: String(offer.id), packSize: offer.catalogProduct.standardUnit || 'Standard pack', price: offer.price, stockQuantity: offer.stockQuantity, imageUrl: Array.isArray(offer.catalogProduct.images) ? offer.catalogProduct.images.find((value): value is string => typeof value === 'string') : null, shop: offer.shop }));
+  }
+
+  async publicProducts(query = '') {
+    const q = query.trim().slice(0, 80);
+    const offers = await this.prisma.pesticideShopOffer.findMany({
+      where: {
+        active: true,
+        stockQuantity: { gt: 0 },
+        shop: activeShop,
+        catalogProduct: q ? { status: 'active', OR: [{ genericName: { contains: q, mode: 'insensitive' } }, { brand: { contains: q, mode: 'insensitive' } }, { displayName: { contains: q, mode: 'insensitive' } }, { category: { contains: q, mode: 'insensitive' } }] } : { status: 'active' },
+      },
+      select: { id: true, price: true, stockQuantity: true, updatedAt: true, catalogProduct: { select: { genericName: true, brand: true, displayName: true, category: true, standardUnit: true, images: true } }, shop: { select: publicShopSelect } },
+      orderBy: { updatedAt: 'desc' },
+      take: 100,
+    });
+    return offers.map(offer => ({ id: offer.id, name: offer.catalogProduct.displayName || offer.catalogProduct.genericName, brand: offer.catalogProduct.brand, category: offer.catalogProduct.category, packSize: offer.catalogProduct.standardUnit || 'Standard pack', price: offer.price, stockQuantity: offer.stockQuantity, imageUrl: Array.isArray(offer.catalogProduct.images) ? offer.catalogProduct.images.find((value): value is string => typeof value === 'string') : null, shop: offer.shop }));
   }
 
   async updateShopStatus(shopId: number, status: string) {
@@ -281,7 +300,7 @@ export class PesticidesService {
     const genericName = dto.genericName.trim(); const brand = dto.brand.trim();
     const existing = await this.prisma.pesticideCatalogProduct.findUnique({ where: { genericName_brand: { genericName, brand } }, select: { id: true, status: true } });
     if (existing?.status === 'active') throw new ConflictException('This catalog product already exists. Select it and add your price and stock.');
-    const images = dto.photoUrl ? [dto.photoUrl.trim()] : undefined;
+    const images = [dto.photoUrl.trim()];
     return existing ? this.prisma.pesticideCatalogProduct.update({ where: { id: existing.id }, data: { displayName: dto.displayName?.trim(), category: dto.category?.trim(), description: dto.description?.trim(), images, standardUnit: dto.standardUnit?.trim(), status: 'pending_review', rejectionReason: null, submittedById: userId, requestedShopId: shopId } }) : this.prisma.pesticideCatalogProduct.create({ data: { genericName, brand, displayName: dto.displayName?.trim(), category: dto.category?.trim(), description: dto.description?.trim(), images, standardUnit: dto.standardUnit?.trim(), status: 'pending_review', submittedById: userId, requestedShopId: shopId } });
   }
   async pendingCatalogRequests() {
@@ -330,6 +349,26 @@ export class PesticidesService {
         isDeliveryEligible: dto.isDeliveryEligible ?? true,
       },
     });
+  }
+
+  async uploadShopAsset(shopId: number, userId: number, kind: 'logo' | 'product', image?: Express.Multer.File) {
+    await this.assertShopAccess(shopId, userId);
+    if (!image) throw new BadRequestException('Select a JPG or PNG image to upload.');
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      await unlink(image.path).catch(() => undefined);
+      throw new BadRequestException('Image uploads are not configured. Please contact support.');
+    }
+    cloudinary.config({ cloud_name: process.env.CLOUDINARY_CLOUD_NAME, api_key: process.env.CLOUDINARY_API_KEY, api_secret: process.env.CLOUDINARY_API_SECRET });
+    try {
+      const uploaded = await cloudinary.uploader.upload(image.path, {
+        folder: `kisan-ka-pakistan/pesticide-shops/${shopId}/${kind === 'logo' ? 'branding' : 'products'}`,
+        resource_type: 'image',
+        allowed_formats: ['jpg', 'jpeg', 'png'],
+      });
+      return { url: uploaded.secure_url };
+    } finally {
+      await unlink(image.path).catch(() => undefined);
+    }
   }
   async shopProducts(shopId: number, userId: number) {
     await this.assertShopAccess(shopId, userId);
@@ -448,9 +487,10 @@ export class PesticidesService {
       throw new BadRequestException(
         'Each product can only appear once in an order.',
       );
-    return this.prisma.$transaction(async (tx) => {
+    const checkout = await this.prisma.$transaction(async (tx) => {
       const shop = await tx.pesticideShop.findFirst({
         where: { id: dto.shopId, ...activeShop },
+        include: { owner: { select: { email: true } } },
       });
       if (!shop)
         throw new NotFoundException('This shop is not available for checkout.');
@@ -504,6 +544,7 @@ export class PesticidesService {
             })),
           },
         },
+        include: { items: true },
       });
       await tx.notification.create({
         data: {
@@ -516,8 +557,20 @@ export class PesticidesService {
           metadata: JSON.stringify({ shopId: shop.id, orderId: order.id }),
         },
       });
-      return order;
+      return { order, ownerEmail: shop.owner.email };
     });
+    if (checkout.ownerEmail) {
+      void this.mailService.sendPesticideOrderMail(checkout.ownerEmail, {
+        orderNumber: checkout.order.orderNumber,
+        customerName: checkout.order.customerName,
+        customerPhone: checkout.order.customerPhone,
+        customerEmail: checkout.order.customerEmail,
+        deliveryAddress: checkout.order.deliveryAddress,
+        total: checkout.order.total,
+        items: checkout.order.items.map(item => ({ productName: item.productName, quantity: item.quantity, lineTotal: item.lineTotal })),
+      });
+    }
+    return checkout.order;
   }
 
   async reviewShop(

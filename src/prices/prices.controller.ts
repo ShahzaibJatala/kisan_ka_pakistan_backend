@@ -17,6 +17,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/roles/roles.decorator';
 import { Role } from '@prisma/client';
 import { PriceRateLimiterGuard } from '../auth/guards/price-rate-limiter.guard';
+import { CreateProductListingDto } from './dto/create-product-listing.dto';
 
 @Controller('prices')
 export class PricesController {
@@ -50,7 +51,7 @@ export class PricesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.FARMER)
   @Post('products/listings')
-  createProductListing(@Body() dto: { productName: string; quantity: number; unit: string; askingPrice: number; description?: string; phone: string; district?: string; city?: string }, @Req() req: any) {
+  createProductListing(@Body() dto: CreateProductListingDto, @Req() req: any) {
     return this.pricesService.createProductListing(dto, req.user.id);
   }
 

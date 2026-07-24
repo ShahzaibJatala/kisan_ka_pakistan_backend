@@ -1,13 +1,44 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Role, UserStatus } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { BypassService } from '../bypass/bypass.service';
+import { CreateSuperAdminDto } from '../auth/dto/super-admin.dto';
 
 const manageableRoles: Role[] = [Role.FARMER, Role.ARTIA, Role.SADAR];
 
 @Injectable()
 export class AdminService {
   constructor(private readonly prisma: PrismaService, private readonly bypassService: BypassService) {}
+
+  async superAdmins() {
+    return this.prisma.user.findMany({
+      where: { role: Role.SUPER_ADMIN },
+      select: { id: true, name: true, email: true, phone: true, status: true, createdAt: true, verifiedAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createSuperAdmin(dto: CreateSuperAdminDto, creatorId: number) {
+    const email = dto.email.trim().toLowerCase();
+    const phone = dto.phone?.trim() || undefined;
+    const conflict = await this.prisma.user.findFirst({
+      where: { OR: [{ email }, ...(phone ? [{ phone }] : [])] },
+      select: { id: true },
+    });
+    if (conflict) throw new ConflictException('An account already uses this email address or phone number.');
+
+    const password = await bcrypt.hash(dto.password, 12);
+    const user = await this.prisma.user.create({
+      data: {
+        name: dto.name.trim(), email, phone, password,
+        role: Role.SUPER_ADMIN, status: UserStatus.VERIFIED,
+        createdBy: creatorId, verifiedBy: creatorId, verifiedAt: new Date(),
+      },
+      select: { id: true, name: true, email: true, phone: true, status: true, createdAt: true, verifiedAt: true },
+    });
+    return user;
+  }
 
   async users(role?: Role, status?: UserStatus) {
     if (role && !manageableRoles.includes(role)) throw new BadRequestException('Unsupported user role.');

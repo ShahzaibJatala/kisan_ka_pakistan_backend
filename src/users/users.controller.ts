@@ -29,25 +29,12 @@ export class UsersController {
     private readonly jwtService: JwtService,
   ) {}
 
-  // Open endpoint supporting both SUPER_ADMIN creation & user self-registration
-  @UseGuards(RateLimiterGuard)
+  // Sadars are provisioned by a Super Admin. Public self-signup is disabled.
+  @UseGuards(JwtAuthGuard, RolesGuard, RateLimiterGuard)
+  @Roles(Role.SUPER_ADMIN)
   @Post('sadar')
   async createSadar(@Body() createUserDto: CreateUserDto, @Req() req: any) {
-    let creator: { id: number; role: Role } | undefined;
-
-    const token = this.extractToken(req);
-    if (token) {
-      try {
-        const decoded = this.jwtService.verify(token);
-        if (decoded && decoded.role === Role.SUPER_ADMIN) {
-          creator = { id: decoded.sub, role: decoded.role as Role };
-        }
-      } catch (e) {
-        // Ignore token parse errors, fallback to user self-registration
-      }
-    }
-
-    return this.usersService.createSadar(createUserDto, creator);
+    return this.usersService.createSadar(createUserDto, { id: req.user.id, role: Role.SUPER_ADMIN });
   }
 
   // ARTIA created by SADAR

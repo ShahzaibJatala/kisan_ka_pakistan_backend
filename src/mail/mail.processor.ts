@@ -47,6 +47,8 @@ export class MailProcessor extends WorkerHost {
           return await this.handleSendGoogleSignupAlert(job.data);
         case 'sendArtiaProfileUpdateMail':
           return await this.handleSendArtiaProfileUpdateMail(job.data);
+        case 'sendPesticideOrderMail':
+          return await this.handleSendPesticideOrderMail(job.data);
         default:
           console.warn(`[MailProcessor] Unknown job name: ${job.name}`);
       }
@@ -67,6 +69,18 @@ export class MailProcessor extends WorkerHost {
       replyTo: process.env.USER_EMAIL,
       subject,
       text,
+    });
+  }
+
+  private async handleSendPesticideOrderMail(data: { to: string; order: { orderNumber: string; customerName: string; customerPhone: string; customerEmail?: string | null; deliveryAddress: string; total: number; items: Array<{ productName: string; quantity: number; lineTotal: number }> } }) {
+    const { to, order } = data;
+    const items = order.items.map(item => `• ${item.productName} × ${item.quantity} — PKR ${item.lineTotal}`).join('\n');
+    await this.getTransporter().sendMail({
+      from: `"Kisan ka Pakistan" <${process.env.USER_EMAIL}>`,
+      to,
+      replyTo: process.env.USER_EMAIL,
+      subject: `New order ${order.orderNumber}`,
+      text: `You have received a new pesticide shop order.\n\nOrder: ${order.orderNumber}\nCustomer: ${order.customerName}\nPhone: ${order.customerPhone}\nEmail: ${order.customerEmail || 'Not provided'}\nDelivery address: ${order.deliveryAddress}\n\nItems:\n${items}\n\nOrder total: PKR ${order.total}`,
     });
   }
 

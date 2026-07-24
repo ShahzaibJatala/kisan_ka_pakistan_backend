@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePriceDto } from './dto/create-price.dto';
+import { CreateProductListingDto } from './dto/create-product-listing.dto';
 import { UpdatePriceDto } from './dto/update-price.dto';
 import { PricesGateway } from './prices.gateway';
 import { RedisService } from '../redis/redis.service';
@@ -136,7 +137,7 @@ export class PricesService {
     return result;
   }
 
-  async createProductListing(dto: { productName: string; quantity: number; unit: string; askingPrice: number; description?: string; phone: string; district?: string; city?: string }, farmerId: number) {
+  async createProductListing(dto: CreateProductListingDto, farmerId: number) {
     return this.prisma.productListing.create({ data: { ...dto, farmerId } });
   }
 

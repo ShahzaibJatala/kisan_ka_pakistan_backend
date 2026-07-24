@@ -57,7 +57,7 @@ export class CreatePesticideProductDto {
   @IsOptional() isDeliveryEligible?: boolean;
 }
 export class CreateShopOfferDto { @IsInt() @IsPositive() catalogProductId: number; @IsNumber() @Min(0) price: number; @IsInt() @Min(0) stockQuantity: number; }
-export class RequestCatalogProductDto { @IsString() @MaxLength(160) genericName: string; @IsString() @MaxLength(100) brand: string; @IsOptional() @IsString() @MaxLength(200) displayName?: string; @IsOptional() @IsString() @MaxLength(100) category?: string; @IsOptional() @IsString() @MaxLength(4000) description?: string; @IsOptional() @IsString() @MaxLength(500) photoUrl?: string; @IsOptional() @IsString() @MaxLength(60) standardUnit?: string; @IsOptional() @IsNumber() @Min(0) requestedPrice?: number; @IsOptional() @IsInt() @Min(0) requestedStockQuantity?: number; }
+export class RequestCatalogProductDto { @IsString() @MaxLength(160) genericName: string; @IsString() @MaxLength(100) brand: string; @IsOptional() @IsString() @MaxLength(200) displayName?: string; @IsOptional() @IsString() @MaxLength(100) category?: string; @IsOptional() @IsString() @MaxLength(4000) description?: string; @IsString() @MaxLength(500) photoUrl: string; @IsOptional() @IsString() @MaxLength(60) standardUnit?: string; @IsOptional() @IsNumber() @Min(0) requestedPrice?: number; @IsOptional() @IsInt() @Min(0) requestedStockQuantity?: number; }
 export class ReviewCatalogProductDto { @IsIn(['APPROVE', 'REJECT', 'SAME_PRODUCT']) decision: 'APPROVE' | 'REJECT' | 'SAME_PRODUCT'; @IsOptional() @IsInt() @IsPositive() matchedCatalogProductId?: number; @IsOptional() @IsString() @MaxLength(1000) reason?: string; @IsOptional() @IsNumber() @Min(0) price?: number; @IsOptional() @IsInt() @Min(0) stockQuantity?: number; }
 
 export class PesticideOrderItemDto { @IsInt() @IsPositive() productId: number; @IsInt() @Min(1) quantity: number; }
@@ -65,7 +65,7 @@ export class CheckoutPesticideDto {
   @IsInt() @IsPositive() shopId: number;
   @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => PesticideOrderItemDto) items: PesticideOrderItemDto[];
   @IsString() @MaxLength(120) customerName: string;
-  @IsString() @MaxLength(30) customerPhone: string;
+  @IsString() @Matches(/^\d{11}$/, { message: 'Customer phone number must contain exactly 11 digits.' }) customerPhone: string;
   @IsOptional() @IsEmail() customerEmail?: string;
   @IsString() @MaxLength(500) deliveryAddress: string;
   @IsOptional() @IsString() @MaxLength(1000) notes?: string;

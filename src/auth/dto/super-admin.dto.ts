@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsEmail, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsEmail, IsOptional, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class SuperAdminLoginDto {
   @IsOptional()
@@ -18,4 +18,24 @@ export class SuperAdminVerifyOtpDto {
   @IsNotEmpty()
   @IsString()
   otp: string;
+}
+
+export class CreateSuperAdminDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  name: string;
+
+  @IsEmail()
+  @MaxLength(254)
+  email: string;
+
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  password: string;
+
+  @IsOptional()
+  @Matches(/^\d{11}$/, { message: 'Phone number must contain exactly 11 digits.' })
+  phone?: string;
 }

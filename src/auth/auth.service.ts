@@ -23,7 +23,7 @@ import { Role, UserStatus } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
-    private superAdminOtp: { otp: string; expires: number } | null = null;
+    private superAdminOtp: { userId: number; otp: string; expires: number } | null = null;
 
   constructor(
     private usersService: UsersService,
@@ -78,13 +78,14 @@ export class AuthService {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
+    await this.mailService.sendOtpMail(email, otp);
+
+    // Persist the reset code only after the mail queue accepts the delivery job.
     await this.usersService.update(user.id, {
       resetOtp: otp,
       otpExpires: expires,
       isOtpVerified: false,
     });
-
-    await this.mailService.sendOtpMail(email, otp);
 
     return { message: 'OTP sent successfully' };
   }
@@ -239,27 +240,36 @@ export class AuthService {
   }
 
   async superAdminLogin(dto: SuperAdminLoginDto) {
-      const now = Date.now();
-
-    const envUser = process.env.SUPER_ADMIN_USER_NAME;
-    const envEmail = process.env.SUPER_ADMIN_EMAIL;
+    const now = Date.now();
+    const email = dto.email.trim().toLowerCase();
+    const envEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
     const envPass = process.env.SUPER_ADMIN_PASSWORD;
 
-    if (
-        dto.email !== envEmail ||
-        dto.password !== envPass ||
-        (dto.username !== undefined && dto.username !== envUser)
-    ) {
+    let user = await this.prisma.user.findFirst({
+      where: { email, role: Role.SUPER_ADMIN, status: UserStatus.VERIFIED },
+    });
+
+    // Keep the original environment account usable during the transition.
+    const isEnvironmentLogin = email === envEmail && dto.password === envPass;
+    if (!user && isEnvironmentLogin) {
+      user = await this.usersService.findOrCreateSuperAdmin(email, 'Super Admin');
+    }
+
+    const passwordValid = user
+      ? isEnvironmentLogin || await bcrypt.compare(dto.password, user.password)
+      : false;
+    if (!user || !passwordValid) {
       throw new UnauthorizedException('Invalid Super Admin credentials');
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     this.superAdminOtp = {
+      userId: user.id,
       otp,
       expires: now + 5 * 60 * 1000,
     };
 
-    await this.mailService.sendSuperAdminOtpMail(dto.email, otp);
+    await this.mailService.sendSuperAdminOtpMail(email, otp);
 
     return {
       message: 'Verification OTP sent to your registered Super Admin email.',
@@ -284,13 +294,17 @@ export class AuthService {
       throw new BadRequestException('Invalid OTP. Please try again.');
     }
 
+    const loginAttempt = this.superAdminOtp;
     this.superAdminOtp = null;
 
-    const email = process.env.SUPER_ADMIN_EMAIL || '';
-    const user = await this.usersService.findOrCreateSuperAdmin(
-      email,
-      'Super Admin',
-    );
+    const user = await this.prisma.user.findFirst({
+      where: {
+        id: loginAttempt.userId,
+        role: Role.SUPER_ADMIN,
+        status: UserStatus.VERIFIED,
+      },
+    });
+    if (!user) throw new UnauthorizedException('Super Admin account is no longer active.');
 
     const { accessToken, refreshToken } = await this.generateTokens(user);
 
